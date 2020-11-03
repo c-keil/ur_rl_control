@@ -63,6 +63,13 @@ class ur5e_arm():
     def daq_callback(self, data):
         self.absolute_encoder_input = data.encoder1.pos
 
+    def is_joint_position(self, position)->bool:
+        '''Verifies that this is a 1dim numpy array with len 6'''
+        if isinstance(position, np.ndarray):
+            return position.ndim==1 and len(position)==6
+        else:
+            return False
+
     def shutdown_safe(self):
         '''Should ensure that the arm is brought to a stop before exiting'''
         self.shutdown = True
@@ -71,14 +78,14 @@ class ur5e_arm():
 
     def stop_arm(self):
         '''commands zero velocity until sure the arm is stopped'''
-        while np.any(self.current_joint_velocities>0.001):
+        while np.any(np.abs(self.current_joint_velocities)>0.001):
             self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
     def in_joint_lims(self, position):
         '''expects an array of joint positions'''
         return True if np.all(self.lower_lims < position) and np.all(self.upper_lims > position) else False
 
-    def move_to(self, position, speed = 0.5, error_thresh = 0.01, override_initial_joint_lims = False):
+    def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False)->bool:
         '''CAUTION - use joint lim override with extreme caution. Intended to
         allow movement from outside the lims back to acceptable position.
 
@@ -86,10 +93,21 @@ class ur5e_arm():
         configuration without teleop input. Intended for testing or to reach
         present initial positions, etc.'''
 
+        #define max speed slow for safety
+        if speed > 0.5:
+            print("Limiting speed to 0.5 rad/sec")
+            speed = 0.5
+
         #calculate traj from current position
         start_pos = deepcopy(self.current_joint_positions)
         max_disp = np.max(np.abs(position-start_pos))
         end_time = max_disp/speed
+
+        #make sure this is a valid joint position
+        if not self.is_joint_position(position):
+            print("Invalid Joint Position, Exiting move_to function")
+            return False
+
         #check joint llims
         if not override_initial_joint_lims:
             if not self.in_joint_lims(start_pos):
