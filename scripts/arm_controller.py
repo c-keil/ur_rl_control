@@ -12,7 +12,7 @@ from ur5teleop.msg import jointdata, Joint
 # from controller_manager_msgs.srv import SwitchController
 
 joint_vel_lim = 1.0
-
+control_arm_saved_zero = np.array([0.61465591, 1.22207916, 0.36568704, 1.04289675, 3.14202762, 5.99422216])
 #define initial state
 
 # # TODO Arm class
@@ -33,11 +33,18 @@ class ur5e_arm():
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([90.0, -45.0, 140.0, -45.0, -45.0, 225.0])
 
-    #define fields that are updated by the robot callbacks
+    #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
+    #the robot can use relative joint control, but this saved defailt state can
+    #be used to return to a 1 to 1, absolute style control
+    control_arm_def_config = control_arm_saved_zero
+
+    #define fields that are updated by the subscriber callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
+    current_daq_positions = np.zeros(6)
+    current_daq_velocities = np.zeros(6)
 
-    def __init__(self, test_control_signal = False , conservative_joint_lims = True):
+    def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
@@ -47,12 +54,15 @@ class ur5e_arm():
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
         #start subscribers
-        rospy.Subscriber("joint_states", JointState, self.joint_state_callback)
         if test_control_signal:
-            print('Running in test mode')
+            print('Running in test mode ... no daq input')
             self.test_control_signal = test_control_signal
         else:
             rospy.Subscriber("daqdata_filtered", jointdata, self.daq_callback)
+
+        #joint feedback subscriber
+        rospy.Subscriber("joint_states", JointState, self.joint_state_callback)
+
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
                             Float64MultiArray,
@@ -71,9 +81,18 @@ class ur5e_arm():
         self.current_joint_velocities[self.joint_reorder] = data.velocity
 
     def daq_callback(self, data):
-        self.absolute_encoder_input = data.encoder1.pos
+        self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
+        self.current_daq_velocities[:] = [data.encoder1.pos, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
 
-    def is_joint_position(self, position)->bool:
+    def calibrate_control_arm_zero_position(self, interactive = True):
+        '''Sets the control arm zero position to the current encoder joint states
+        TODO: Write configuration to storage for future use'''
+        if interactive:
+            _ = raw_input("Hit enter when ready to calibrate.")
+        self.control_arm_def_config = deepcopy(self.current_daq_positions)
+        print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
+
+    def is_joint_position(self, position):
         '''Verifies that this is a 1dim numpy array with len 6'''
         if isinstance(position, np.ndarray):
             return position.ndim==1 and len(position)==6
@@ -95,7 +114,7 @@ class ur5e_arm():
         '''expects an array of joint positions'''
         return True if np.all(self.lower_lims < position) and np.all(self.upper_lims > position) else False
 
-    def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False)->bool:
+    def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False):
         '''CAUTION - use joint lim override with extreme caution. Intended to
         allow movement from outside the lims back to acceptable position.
 
@@ -122,10 +141,10 @@ class ur5e_arm():
         if not override_initial_joint_lims:
             if not self.in_joint_lims(start_pos):
                 print("Start Position Outside Joint Lims...")
-                return
+                return False
         if not self.in_joint_lims(position):
             print("Commanded Postion Outside Joint Lims...")
-            return
+            return False
 
 
         print('Executing Move to : \n{}\nIn {} seconds'.format(position,end_time))
@@ -173,10 +192,24 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("starting")
 
-    arm = ur5e_arm(test_control_signal=True)
+    arm = ur5e_arm(test_control_signal=False)
     time.sleep(1)
+    print("Current Arm Position")
     print(arm.current_joint_positions)
+    raw_input("Hit enter to get daq position")
+    print("DAQ position:")
+    print(arm.current_daq_positions)
+    daq_pos = deepcopy(arm.current_daq_positions)
+    daq_offset = arm.current_daq_positions - arm.control_arm_def_config
+    print("DAQ offset from default pos: \n{}".format(daq_offset))
+    if 'y'==raw_input('Execute Move? (y/n)'):
+        target_pos = arm.default_pos + daq_offset
+        arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=True)
+
+
+    # arm.calibrate_control_arm_zero_position(interactive = True)
     arm.stop_arm()
+
 
     # target_pos = arm.default_pos
     # target_pos[5]+=1.0
