@@ -15,6 +15,10 @@
 
 -Test encoder publishing rate - default at 100hz
 
+-Separate Node to keep track of ref pos? To do this in parallel with keyboard shortcuts?
+
+-Define handling of joint lims inside vel control loop
+
 # Usage
 CAUTION: Check the initial joint configuration and make sure it is near the default joint config. The arm is sometimes in a very different position after other people have used it, and may cause damage to the gripper when starting motion for the first time.
 
