@@ -2,7 +2,14 @@
 
 # TODO
 -Implement main control loop (mostly copy from test script)
+
 -Add safety features - dead man switch - max - accel
+
+-Fix Stop Function
+
+-Feature, detect when position error is too large and stop
+
+-Add ability to slowly track to user current position
 
 # Usage
 CAUTION: Check the initial joint configuration and make sure it is near the default joint config. The arm is sometimes in a very different position after other people have used it, and may cause damage to the gripper when starting motion for the first time.
