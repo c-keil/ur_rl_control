@@ -25,14 +25,24 @@ class ur5e_arm():
     shutdown = False
     joint_reorder = [2,1,0,3,4,5]
     joint_p_gains = np.array([10.0]*6) #works up to at least 20 on wrist 3
+
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
+
     lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
+    conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
+    conservative_upper_lims = (np.pi/180)*np.array([90.0, -45.0, 140.0, -45.0, -45.0, 225.0])
+
+    #define fields that are updated by the robot callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
 
-    def __init__(self, test_control_signal = False ):
+    def __init__(self, test_control_signal = False , conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
+
+        if conservative_joint_lims:
+            self.lower_lims = self.conservative_lower_lims
+            self.upper_lims = self.conservative_upper_lims
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -126,6 +136,7 @@ class ur5e_arm():
         pos_ref = deepcopy(start_pos)
         rate = rospy.Rate(500) #lim loop to 500 hz
         start_time = time.time()
+        reached_pos = False
         while True and not self.shutdown: #chutdown is set on ctrl-c.
             loop_time = time.time()-start_time
             if loop_time < end_time:
@@ -136,6 +147,7 @@ class ur5e_arm():
                 if np.all(np.abs(position_error)<error_thresh):
                     print("reached target position")
                     self.stop_arm()
+                    reached_pos = True
                     break
 
             position_error = pos_ref - self.current_joint_positions
@@ -150,7 +162,7 @@ class ur5e_arm():
 
         #make sure arm stops
         self.stop_arm()
-        return
+        return reached_pos
 
     def move():
         '''TODO Implement main control loop for teleoperation use. '''
