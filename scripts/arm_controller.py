@@ -259,7 +259,7 @@ if __name__ == "__main__":
     arm.stop_arm()
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
-    arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
+    # arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
 
     print("Current Arm Position")
     print(arm.current_joint_positions)
@@ -272,7 +272,7 @@ if __name__ == "__main__":
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
     raw_input("Hit enter when ready to move")
-    arm.move()
+    # arm.move()
 
     arm.stop_arm()
 
