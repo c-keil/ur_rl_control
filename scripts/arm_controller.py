@@ -29,7 +29,7 @@ class ur5e_arm():
     shutdown = False
     joint_reorder = [2,1,0,3,4,5]
     joint_p_gains = np.array([10.0]*6) #works up to at least 20 on wrist 3
-    joint_p_gains_low = np.array([1.0]*6) #works up to at least 20 on wrist 3
+    joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
 
@@ -37,7 +37,7 @@ class ur5e_arm():
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-
+    max_joint_speeds = np.array([0.5, 0.5, 0.5, 3.0, 3.0, 3.0])
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
     #be used to return to a 1 to 1, absolute style control
@@ -106,6 +106,7 @@ class ur5e_arm():
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
         self.current_daq_rel_positions *= joint_inversion
+        # np.around(self.current_daq_rel_positions,decimals=3)
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
@@ -119,7 +120,7 @@ class ur5e_arm():
         '''Captures the current joint positions, and resolves encoder startup
         rollover issue. This adds increments of 2*pi to the control_arm_saved_zero
         to match the current joint positions to the actual saved position.'''
-        max_acceptable_error = 0.2
+        max_acceptable_error = 0.6
         tries = 3
         for i in range(tries):
             if interactive:
@@ -309,12 +310,13 @@ class ur5e_arm():
 
             # print(position_error)
             #calculate vel signal
-            np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
-            # np.multiply(position_error,self.joint_p_gains_low,out=vel_ref_array)
+            # np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
+            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
             #enforce max velocity setting
             # np.clip(vel_ref_array,-joint_vel_lim,joint_vel_lim,vel_ref_array)
 
-            np.clip(vel_ref_array,-low_joint_vel_lim,low_joint_vel_lim,vel_ref_array)
+            # np.clip(vel_ref_array,-low_joint_vel_lim,low_joint_vel_lim,vel_ref_array)
+            np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             #publish
             self.vel_ref.data = vel_ref_array

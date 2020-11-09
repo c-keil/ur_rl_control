@@ -8,7 +8,7 @@
 
 -Add safety features - dead man switch - keep out zones
 
--resolve encoder absolute position rollover issue: add a function that can set the current default_encoder_position setpoints to be 2pi wraped closest values. If the daq is turned on, then moved a significant amount (especially likely with the base joint), the user might expect close to zero difference from the refference position, but in reality there is ~2pi difference.
+-resolve encoder absolute position rollover issue: add a function that can set the current default_encoder_position setpoints to be 2pi wraped closest values. If the daq is turned on, then moved a significant amount (especially likely with the base joint), the user might expect close to zero difference from the reference position, but in reality there is ~2pi difference.
 
 -Feature, detect when position error is too large and stop
 
@@ -19,6 +19,14 @@
 -Test encoder publishing rate - default at 100hz
 
 -Separate Node to keep track of ref pos? To do this in parallel with keyboard shortcuts?
+
+-control arm too big?
+
+-Forward kinematics, safety position limits/keep out zones
+
+-implement pausing and restarting functions - slow catch-up? - update reference position?
+
+-velocity reference safety limit - check DAQ input  
 
 <!-- -Define handling of joint lims inside vel control loop -->
 
