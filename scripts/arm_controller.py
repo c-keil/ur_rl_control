@@ -16,6 +16,9 @@ joint_vel_lim = 1.0
 control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, -0.03857971, 0.99792278, 3.12708712, 5.91298103])
 #define initial state
 
+#joint inversion - accounts for encoder axes being inverted inconsistently
+joint_inversion = np.array([-1,-1,1,-1,-1,-1])
+
 # # TODO Arm class
     #Breaking at shutdown
     #Follow traj
@@ -26,6 +29,7 @@ class ur5e_arm():
     shutdown = False
     joint_reorder = [2,1,0,3,4,5]
     joint_p_gains = np.array([10.0]*6) #works up to at least 20 on wrist 3
+    joint_p_gains_low = np.array([1.0]*6) #works up to at least 20 on wrist 3
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
 
@@ -76,6 +80,9 @@ class ur5e_arm():
         self.ref_pos_pub = rospy.Publisher("/debug_ref_pos",
                             Float64MultiArray,
                             queue_size=1)
+        self.ref_vel_pub = rospy.Publisher("/debug_ref_vel",
+                            Float64MultiArray,
+                            queue_size=1)
         self.ref_pos = Float64MultiArray(data=[0,0,0,0,0,0])
 
         #set shutdown safety behavior
@@ -98,6 +105,7 @@ class ur5e_arm():
         self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
+        self.current_daq_rel_positions *= joint_inversion
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
@@ -117,8 +125,10 @@ class ur5e_arm():
     def shutdown_safe(self):
         '''Should ensure that the arm is brought to a stop before exiting'''
         self.shutdown = True
+        print('Stopping -> Shutting Down')
         self.stop_arm()
-        self.stop_arm()
+        print('Stopped')
+        # self.stop_arm()
 
     def stop_arm(self):
         '''commands zero velocity until sure the arm is stopped'''
@@ -217,7 +227,7 @@ class ur5e_arm():
         # raise NotImplementedError()
 
         max_pos_error = 0.5 #radians/sec
-        low_joint_vel_lim = 0.1
+        low_joint_vel_lim = 0.5
 
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
@@ -247,11 +257,15 @@ class ur5e_arm():
             # print(position_error)
             #calculate vel signal
             np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
+            # np.multiply(position_error,self.joint_p_gains_low,out=vel_ref_array)
             #enforce max velocity setting
             # np.clip(vel_ref_array,-joint_vel_lim,joint_vel_lim,vel_ref_array)
+
             np.clip(vel_ref_array,-low_joint_vel_lim,low_joint_vel_lim,vel_ref_array)
+
             #publish
             self.vel_ref.data = vel_ref_array
+            # self.ref_vel_pub.publish(self.vel_ref)
             self.vel_pub.publish(self.vel_ref)
             #wait
             rate.sleep()
@@ -267,7 +281,7 @@ if __name__ == "__main__":
     arm.stop_arm()
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
-    # arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
+    arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
 
     print("Current Arm Position")
     print(arm.current_joint_positions)
@@ -280,7 +294,7 @@ if __name__ == "__main__":
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
     raw_input("Hit enter when ready to move")
-    # arm.move()
+    arm.move()
 
     arm.stop_arm()
 
