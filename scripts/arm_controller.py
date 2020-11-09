@@ -72,6 +72,12 @@ class ur5e_arm():
                             Float64MultiArray,
                             queue_size=1)
 
+        #ref pos publisher DEBUG
+        self.ref_pos_pub = rospy.Publisher("/debug_ref_pos",
+                            Float64MultiArray,
+                            queue_size=1)
+        self.ref_pos = Float64MultiArray(data=[0,0,0,0,0,0])
+
         #set shutdown safety behavior
         rospy.on_shutdown(self.shutdown_safe)
         time.sleep(0.5)
@@ -222,12 +228,14 @@ class ur5e_arm():
         while True and not self.shutdown: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
+            self.ref_pos.data = ref_pos
+            self.ref_pos_pub.publish(self.ref_pos)
 
             #enforce joint lims
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
 
             #inplace error calculation
-            np.subtract(ref_pos,self.current_joint_positions,position_error)
+            np.subtract(ref_pos, self.current_joint_positions, position_error)
             # np.abs(position_error,out=absolute_position_error)
             # #if position error is very large, we should slowly approach the target ...
             # #maybe we should use a filter to do this to move a small amount in the direction
