@@ -115,6 +115,59 @@ class ur5e_arm():
         self.control_arm_def_config = deepcopy(self.current_daq_positions)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
+    def capture_control_arm_ref_position(self, interactive = True):
+        '''Captures the current joint positions, and resolves encoder startup
+        rollover issue. This adds increments of 2*pi to the control_arm_saved_zero
+        to match the current joint positions to the actual saved position.'''
+        max_acceptable_error = 0.2
+        tries = 3
+        for i in range(tries):
+            if interactive:
+                _ = raw_input("Hit enter when ready to capture the control arm ref pos. Try {}/{}".format(i+1,tries))
+            #get current config
+            control_arm_config = deepcopy(self.current_daq_positions)
+            # print('Current DAQ Position:')
+            # print(control_arm_config)
+            #check if there is a significant error
+            # config_variant1 = control_arm_config+2*np.pi
+            # config_variant2 = control_arm_config-2*np.pi
+            rot_offsets = [0, 2*np.pi, -2*np.pi]
+            config_variants = [self.control_arm_def_config+off for off in rot_offsets]
+            # error_set_1 = np.abs(self.control_arm_def_config - control_arm_config)
+            # error_set_2 = np.abs(self.control_arm_def_config - config_variant1)
+            # error_set_3 = np.abs(self.control_arm_def_config - config_variant2)
+            error_sets = [np.abs(control_arm_config - var) for var in config_variants]
+            print(error_sets)
+            # print(error_set_2)
+            # print(error_set_3)
+            #if a 2*pi offset is a good match, reset the def_config to match
+            error_too_great = [False]*6
+            new_controll_config = deepcopy(self.control_arm_def_config)
+            #TODO change behabior for base joint
+            for joint in range(6):
+                # configs = [control_arm_config, config_variant1, config_variant2]
+                # offsets = [error_set_1[joint], error_set_2[joint], error_set_3[joint]]
+                errors = [err[joint] for err in error_sets]
+                min_error_idx = np.argmin(errors)
+                if errors[min_error_idx]<max_acceptable_error:
+                    new_controll_config[joint] = config_variants[min_error_idx][joint]
+                    # new_controll_config[joint] = new_controll_config[joint]+rot_offsets[min_error_idx]
+                else:
+                    error_too_great[joint] = True
+            if any(error_too_great):
+                print('Excessive error. It may be necessary to recalibrate.')
+                print('Make sure arm matches default config and try again.')
+            else:
+                print('Encoder Ref Capture successful.')
+                print('New control arm config:\n{}'.format(new_controll_config))
+                print('Updated from:')
+                print(self.control_arm_def_config)
+                time.sleep(1)
+                self.control_arm_def_config = new_controll_config
+                self.control_arm_ref_config = deepcopy(new_controll_config)
+                break
+
+
     def is_joint_position(self, position):
         '''Verifies that this is a 1dim numpy array with len 6'''
         if isinstance(position, np.ndarray):
@@ -282,7 +335,7 @@ if __name__ == "__main__":
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
     arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
-
+    arm.capture_control_arm_ref_position()
     print("Current Arm Position")
     print(arm.current_joint_positions)
     print("DAQ position:")
