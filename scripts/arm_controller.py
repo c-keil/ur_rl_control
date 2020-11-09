@@ -90,14 +90,14 @@ class ur5e_arm():
 
     def daq_callback(self, data):
         self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
-        self.current_daq_velocities[:] = [data.encoder1.pos, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
+        self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
         TODO: Write configuration to storage for future use'''
         if interactive:
-            _ = raw_input("Hit enter when ready to calibrate.")
+            _ = raw_input("Hit enter when ready to save the control arm ref pos.")
         self.control_arm_def_config = deepcopy(self.current_daq_positions)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
