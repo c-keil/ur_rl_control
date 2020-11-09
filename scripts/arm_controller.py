@@ -37,7 +37,8 @@ class ur5e_arm():
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-    max_joint_speeds = np.array([0.5, 0.5, 0.5, 3.0, 3.0, 3.0])
+    # max_joint_speeds = np.array([0.5, 0.5, 0.5, 3.0, 3.0, 3.0])
+    max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
     #be used to return to a 1 to 1, absolute style control
@@ -186,7 +187,7 @@ class ur5e_arm():
 
     def stop_arm(self):
         '''commands zero velocity until sure the arm is stopped'''
-        while np.any(np.abs(self.current_joint_velocities)>0.001):
+        while np.any(np.abs(self.current_joint_velocities)>0.0001):
             self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
     def in_joint_lims(self, position):
