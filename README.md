@@ -1,9 +1,12 @@
 # Readme
 
 # TODO
--Implement main control loop (mostly copy from test script)
 
--Add safety features - dead man switch - max - accel
+-Tune joint gains
+
+-Add max acceleration limit
+
+-Add safety features - dead man switch - keep out zones
 
 -resolve encoder absolute position rollover issue: add a function that can set the current default_encoder_position setpoints to be 2pi wraped closest values. If the daq is turned on, then moved a significant amount (especially likely with the base joint), the user might expect close to zero difference from the refference position, but in reality there is ~2pi difference.
 
@@ -17,7 +20,7 @@
 
 -Separate Node to keep track of ref pos? To do this in parallel with keyboard shortcuts?
 
--Define handling of joint lims inside vel control loop
+<!-- -Define handling of joint lims inside vel control loop -->
 
 # Usage
 CAUTION: Check the initial joint configuration and make sure it is near the default joint config. The arm is sometimes in a very different position after other people have used it, and may cause damage to the gripper when starting motion for the first time.
