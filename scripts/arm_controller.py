@@ -13,7 +13,8 @@ from ur5teleop.msg import jointdata, Joint
 
 joint_vel_lim = 1.0
 # control_arm_saved_zero = np.array([0.61465591, 1.22207916, 0.36568704, 1.04289675, 3.14202762, 5.99422216])
-control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, -0.03857971, 0.99792278, 3.12708712, 5.91298103])
+# control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, -0.03857971, 0.99792278, 3.12708712, 5.91298103])
+control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, 3.41145086, 0.99792278, 3.12708712, 3.00708651])
 #define initial state
 
 #joint inversion - accounts for encoder axes being inverted inconsistently
