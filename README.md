@@ -2,13 +2,15 @@
 
 # TODO
 
+-Add visuals for motion prediction, joint lommit indication, keepout zones, etc.
+
 -Tune joint gains
 
 -Add max acceleration limit
 
 -Add safety features - dead man switch - keep out zones
 
--resolve encoder absolute position rollover issue: add a function that can set the current default_encoder_position setpoints to be 2pi wraped closest values. If the daq is turned on, then moved a significant amount (especially likely with the base joint), the user might expect close to zero difference from the reference position, but in reality there is ~2pi difference.
+-resolve encoder absolute position rollover issue: add a function that can set the current default_encoder_position setpoints to be 2pi wraped closest values. If the daq is turned on, then moved a significant amount (especially likely with the base joint), the user might expect close to zero difference from the reference position, but in reality there is ~2pi difference. ---- this can be fixed by automatically wrapping the daq input, centered on the saved configuration
 
 -Feature, detect when position error is too large and stop
 
