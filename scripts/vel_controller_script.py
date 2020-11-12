@@ -14,6 +14,7 @@ default_pos = np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
 
 current_joint_states = np.array([0.0,0.0,0.0,0.0,0.0,0.0])
 absolute_ref_pos = np.array([0.0])
+ref_vel = np.array([0.0])
 
 def joint_state_callback(data):
     # current_joint_states[joint_reorder] = data.position
@@ -26,6 +27,7 @@ def joint_state_callback(data):
 
 def daq_callback(data):
     absolute_ref_pos[0] = data.encoder1.pos
+    ref_vel[0] = data.encoder1.vel
 
 def listener():
 
@@ -48,6 +50,7 @@ def listener():
     vel_lim = 3.0
     start_positon = deepcopy(current_joint_states)
     goal_postion = np.array([0.,0.,0.,0.,0.,0.])
+    feedforward_term = np.array([0.,0.,0.,0.,0.,0.])
     print(goal_postion)
     # goal_postion[5] += 2.0
     print(goal_postion)
@@ -60,16 +63,17 @@ def listener():
     # input("")
     # p_gain = 20.0
     p_gain = 10.0
+    k_ff = 0.01
     # spin() simply keeps python from exiting until this node is stopped
     start_time = time.time()
-    while time.time()-start_time < 30.0:
+    while time.time()-start_time < 10.0:
         # print("Goal: {}, Current {}".format(goal_postion,current_joint_states))
         relative_postion = absolute_ref_pos[0] - start_encoder_pos
-        # print(relative_postion)
         goal_postion[5] = relative_postion
         position_error = start_positon + goal_postion - current_joint_states
         # print(position_error)
-        vel_ref_temp = p_gain*position_error
+        feedforward_term[5] = k_ff*ref_vel[0]
+        vel_ref_temp = p_gain*position_error + feedforward_term
         np.clip(vel_ref_temp,-vel_lim,vel_lim,vel_ref_temp)
         # print(vel_ref_temp)
         vel_ref.data = vel_ref_temp
