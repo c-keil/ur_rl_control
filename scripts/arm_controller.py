@@ -12,14 +12,13 @@ from ur5teleop.msg import jointdata, Joint
 # from controller_manager_msgs.srv import SwitchController
 
 joint_vel_lim = 1.0
-# control_arm_saved_zero = np.array([0.61465591, 1.22207916, 0.36568704, 1.04289675, 3.14202762, 5.99422216])
-# control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, -0.03857971, 0.99792278, 3.12708712, 5.91298103])
-control_arm_saved_zero = np.array([ 0.62736291, 1.19030643, 3.41145086, 0.99792278, 3.12708712, 3.00708651])
+control_arm_saved_zero = np.array([0.51031649, 1.22624958, 3.31996918, 0.93126088, 3.1199832, 9.78404331])
+
 #define initial state
 
 #joint inversion - accounts for encoder axes being inverted inconsistently
 joint_inversion = np.array([-1,-1,1,-1,-1,-1])
-
+two_pi = np.pi*2
 # # TODO Arm class
     #Breaking at shutdown
     #Follow traj
@@ -38,12 +37,12 @@ class ur5e_arm():
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-    # max_joint_speeds = np.array([0.5, 0.5, 0.5, 3.0, 3.0, 3.0])
     max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+    max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
     #be used to return to a 1 to 1, absolute style control
-    control_arm_def_config = control_arm_saved_zero
+    control_arm_def_config = np.mod(control_arm_saved_zero,np.pi*2)
     control_arm_ref_config = deepcopy(control_arm_def_config) #can be changed to allow relative motion
 
     #define fields that are updated by the subscriber callbacks
@@ -52,7 +51,9 @@ class ur5e_arm():
 
     current_daq_positions = np.zeros(6)
     current_daq_velocities = np.zeros(6)
+    #DEBUG
     current_daq_rel_positions = np.zeros(6) #current_daq_positions - control_arm_ref_config
+    current_daq_rel_positions_waraped = np.zeros(6)
 
     def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
@@ -79,13 +80,16 @@ class ur5e_arm():
                             queue_size=1)
 
         #ref pos publisher DEBUG
-        self.ref_pos_pub = rospy.Publisher("/debug_ref_pos",
+        self.daq_pos_pub = rospy.Publisher("/debug_ref_pos",
                             Float64MultiArray,
                             queue_size=1)
-        self.ref_vel_pub = rospy.Publisher("/debug_ref_vel",
+        self.daq_pos_wraped_pub = rospy.Publisher("/debug_ref_wraped_pos",
                             Float64MultiArray,
                             queue_size=1)
         self.ref_pos = Float64MultiArray(data=[0,0,0,0,0,0])
+        #DEBUG
+        # self.daq_pos_debug = Float64MultiArray(data=[0,0,0,0,0,0])
+        # self.daq_pos_wraped_debug = Float64MultiArray(data=[0,0,0,0,0,0])
 
         #set shutdown safety behavior
         rospy.on_shutdown(self.shutdown_safe)
@@ -106,9 +110,20 @@ class ur5e_arm():
     def daq_callback(self, data):
         self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
+        self.current_daq_velocities *= joint_inversion #account for diferent conventions
         np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
         self.current_daq_rel_positions *= joint_inversion
+        self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
+
+        #DEBUG
+        # self.daq_pos_debug.data = self.current_daq_rel_positions
+        # self.daq_pos_wraped_debug.data = self.current_daq_rel_positions_waraped
+        # self.daq_pos_pub.publish(self.daq_pos_debug)
+        # self.daq_pos_wraped_pub.publish(self.daq_pos_wraped_debug)
+
         # np.around(self.current_daq_rel_positions,decimals=3)
+
+    # def wrap_relative_angles(self):
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
@@ -294,8 +309,8 @@ class ur5e_arm():
         while True and not self.shutdown: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
-            self.ref_pos.data = ref_pos
-            self.ref_pos_pub.publish(self.ref_pos)
+            # self.ref_pos.data = ref_pos
+            # self.ref_pos_pub.publish(self.ref_pos)
 
             #enforce joint lims
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
@@ -339,11 +354,11 @@ if __name__ == "__main__":
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
     arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
-    arm.capture_control_arm_ref_position()
-    print("Current Arm Position")
-    print(arm.current_joint_positions)
-    print("DAQ position:")
-    print(arm.current_daq_positions)
+    # arm.capture_control_arm_ref_position()
+    # print("Current Arm Position")
+    # print(arm.current_joint_positions)
+    # print("DAQ position:")
+    # print(arm.current_daq_positions)
     # daq_pos = deepcopy(arm.current_daq_positions)
     # daq_offset = arm.current_daq_positions - arm.control_arm_def_config
     # print("DAQ offset from default pos: \n{}".format(daq_offset))
