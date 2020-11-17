@@ -38,7 +38,7 @@ class ur5e_arm():
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
-    max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
+    # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
     #be used to return to a 1 to 1, absolute style control
@@ -130,8 +130,15 @@ class ur5e_arm():
         TODO: Write configuration to storage for future use'''
         if interactive:
             _ = raw_input("Hit enter when ready to save the control arm ref pos.")
-        self.control_arm_def_config = deepcopy(self.current_daq_positions)
+        self.control_arm_def_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        self.control_arm_ref_config = deepcopy(self.control_arm_def_config)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
+
+    def set_current_config_as_control_ref_config(self, interactive = True):
+        if interactive:
+            _ = raw_input("Hit enter when ready to set the control arm ref pos.")
+        self.control_arm_ref_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        print("Control Arm Ref Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
     def capture_control_arm_ref_position(self, interactive = True):
         '''Captures the current joint positions, and resolves encoder startup
@@ -293,7 +300,7 @@ class ur5e_arm():
         self.stop_arm()
         return reached_pos
 
-    def move(self):
+    def move(self, capture_start_as_ref_pos = False):
         '''TODO Implement main control loop for teleoperation use. '''
         # raise NotImplementedError()
 
@@ -306,9 +313,14 @@ class ur5e_arm():
         vel_ref_array = np.zeros(6)
         ref_pos = deepcopy(self.current_joint_positions)
         rate = rospy.Rate(500)
+
+        if capture_start_as_ref_pos:
+            self.set_current_config_as_control_ref_config()
+
         while True and not self.shutdown: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
-            np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
+            # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
+            np.add(self.default_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
             # self.ref_pos.data = ref_pos
             # self.ref_pos_pub.publish(self.ref_pos)
 
@@ -366,7 +378,8 @@ if __name__ == "__main__":
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
     raw_input("Hit enter when ready to move")
-    arm.move()
+    # arm.move()
+    arm.move(capture_start_as_ref_pos=True)
 
     arm.stop_arm()
 
