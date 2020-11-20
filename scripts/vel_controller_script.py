@@ -62,8 +62,8 @@ def listener():
 
     # input("")
     # p_gain = 20.0
-    p_gain = 10.0
-    k_ff = 1.2
+    p_gain = 5.0
+    k_ff = 1.0
     # spin() simply keeps python from exiting until this node is stopped
     start_time = time.time()
     while time.time()-start_time < 10.0:

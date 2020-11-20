@@ -28,8 +28,9 @@ class ur5e_arm():
     '''
     shutdown = False
     joint_reorder = [2,1,0,3,4,5]
-    joint_p_gains = np.array([10.0]*6) #works up to at least 20 on wrist 3
+    # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
+    joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
 
@@ -287,7 +288,7 @@ class ur5e_arm():
                     break
 
             position_error = pos_ref - self.current_joint_positions
-            vel_ref_temp = self.joint_p_gains*position_error
+            vel_ref_temp = self.joint_p_gains_varaible*position_error
             #enforce max velocity setting
             np.clip(vel_ref_temp,-joint_vel_lim,joint_vel_lim,vel_ref_temp)
             self.vel_ref.data = vel_ref_temp
@@ -341,6 +342,7 @@ class ur5e_arm():
             #calculate vel signal
             # np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
+            vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
             #enforce max velocity setting
             # np.clip(vel_ref_array,-joint_vel_lim,joint_vel_lim,vel_ref_array)
 
