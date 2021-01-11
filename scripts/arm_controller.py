@@ -35,7 +35,7 @@ class ur5e_arm():
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
 
     lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
-    upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
+    upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
@@ -362,7 +362,7 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("starting")
 
-    arm = ur5e_arm(test_control_signal=False)
+    arm = ur5e_arm(test_control_signal=False, conservative_joint_lims = False)
     time.sleep(1)
     arm.stop_arm()
 
