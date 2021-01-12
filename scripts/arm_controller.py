@@ -8,6 +8,9 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from ur5teleop.msg import jointdata, Joint
+from ur_dashboard_msgs.msg import SafetyMode
+from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
+
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
 
@@ -26,6 +29,7 @@ two_pi = np.pi*2
 class ur5e_arm():
     '''Defines velocity based controller for ur5e arm for use in teleop project
     '''
+    safety_mode = -1
     shutdown = False
     joint_reorder = [2,1,0,3,4,5]
     # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
@@ -72,8 +76,16 @@ class ur5e_arm():
         else:
             rospy.Subscriber("daqdata_filtered", jointdata, self.daq_callback)
 
+        #start robot state subscriber (detects fault or estop press)
+        rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
         #joint feedback subscriber
         rospy.Subscriber("joint_states", JointState, self.joint_state_callback)
+        #service to check if robot program is running
+        rospy.wait_for_service('/ur_hardware_interface/dashboard/program_running')
+        self.remote_control_running = rospy.ServiceProxy('ur_hardware_interface/dashboard/program_running', IsProgramRunning)
+        #service to check safety mode
+        rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
+        self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -104,6 +116,12 @@ class ur5e_arm():
         print(self.upper_lims)
         print(self.lower_lims)
 
+        if not self.ready_to_move():
+            print('User action needed before commands can be sent to the robot.')
+            self.user_prompt_ready_to_move()
+        else:
+            print('Ready to move')
+
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
@@ -125,6 +143,50 @@ class ur5e_arm():
         # np.around(self.current_daq_rel_positions,decimals=3)
 
     # def wrap_relative_angles(self):
+    def safety_callback(self, data):
+        '''Detect when safety stop is triggered'''
+        self.safety_mode = data.mode
+        if not data.mode == 1:
+            #estop or protective stop triggered
+            #send a breaking command
+            print('\nFault Detected, sending stop command\n')
+            self.stop_arm() #set commanded velocities to zero
+
+            #wait for user to fix the stop
+            # self.user_wait_safety_stop()
+
+    def user_wait_safety_stop(self):
+        #wait for user to fix the stop
+        while not self.safety_mode == 1:
+            raw_input('Safety Stop or other stop condition enabled.\n Correct the fault, then hit enter to continue')
+
+    def ensure_safety_mode(self):
+        '''Blocks until the safety mode is 1 (normal)'''
+        while not self.safety_mode == 1:
+            raw_input('Robot safety mode is not normal, \ncheck the estop and correct any faults, then restart the external control program and hit enter. ')
+
+    def get_safety_mode(self):
+        '''Calls get safet mode service, does not return self.safety_mode, which is updated by the safety mode topic, but should be the same.'''
+        return self.safety_mode_proxy().safety_mode.mode
+
+    def ready_to_move(self):
+        '''returns true if the safety mode is 1 (normal) and the remote program is running'''
+        return self.get_safety_mode() == 1 and self.remote_control_running()
+
+    def user_prompt_ready_to_move(self):
+        '''Blocking dialog to get the user to reset the safety warnings and start the remote program'''
+        while True:
+            if not self.get_safety_mode() == 1:
+                print(self.get_safety_mode())
+                raw_input('Safety mode is not Normal. Please correct the fault, then hit enter.')
+            else:
+                break
+        while True:
+            if not self.remote_control_running():
+                raw_input('The remote control URCap program has been pause or was not started, please restart it, then hit enter.')
+            else:
+                break
+        print('\nRemote control program is running, and safety mode is Normal\n')
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
@@ -232,6 +294,9 @@ class ur5e_arm():
                     print('Joint {}: Position {:.5} exceeds upper bound {:.5}'.format(i,pos,self.lower_lims[i]))
             return False
 
+    def remote_program_running(self):
+        return self.remote_control_running().program_running
+
     def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False):
         '''CAUTION - use joint lim override with extreme caution. Intended to
         allow movement from outside the lims back to acceptable position.
@@ -239,6 +304,9 @@ class ur5e_arm():
         Defines a simple joing controller to bring the arm to a desired
         configuration without teleop input. Intended for testing or to reach
         present initial positions, etc.'''
+
+        if not self.ready_to_move():
+            self.user_prompt_ready_to_move()
 
         #define max speed slow for safety
         if speed > 0.5:
@@ -302,8 +370,9 @@ class ur5e_arm():
         return reached_pos
 
     def move(self, capture_start_as_ref_pos = False):
-        '''TODO Implement main control loop for teleoperation use. '''
-        # raise NotImplementedError()
+        '''Main control loop for teleoperation use.'''
+        if not self.ready_to_move():
+            self.user_prompt_ready_to_move()
 
         max_pos_error = 0.5 #radians/sec
         low_joint_vel_lim = 0.5
@@ -317,8 +386,8 @@ class ur5e_arm():
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config()
-
-        while True and not self.shutdown: #chutdown is set on ctrl-c.
+        print('safety_mode',self.safety_mode)
+        while True and not self.shutdown and self.safety_mode == 1: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
             np.add(self.default_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
@@ -365,6 +434,10 @@ if __name__ == "__main__":
     arm = ur5e_arm(test_control_signal=False, conservative_joint_lims = False)
     time.sleep(1)
     arm.stop_arm()
+
+    # print(arm.remote_control_running().program_running)
+    # raw_input('waiting')
+    # print(arm.remote_control_running().program_running)
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
     arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
