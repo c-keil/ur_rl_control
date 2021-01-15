@@ -295,6 +295,7 @@ class ur5e_arm():
             return False
 
     def remote_program_running(self):
+        print('remote : ',self.remote_control_running().program_running)
         return self.remote_control_running().program_running
 
     def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False):
@@ -387,7 +388,7 @@ class ur5e_arm():
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config()
         print('safety_mode',self.safety_mode)
-        while True and not self.shutdown and self.safety_mode == 1: #chutdown is set on ctrl-c.
+        while not self.shutdown and self.safety_mode == 1: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
             np.add(self.default_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
