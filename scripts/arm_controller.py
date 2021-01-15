@@ -10,6 +10,7 @@ from sensor_msgs.msg import JointState
 from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
+from std_msgs.msg import Bool
 
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
@@ -31,12 +32,14 @@ class ur5e_arm():
     '''
     safety_mode = -1
     shutdown = False
+    enabled = False
     joint_reorder = [2,1,0,3,4,5]
     # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
+    robot_ref_pos = deepcopy(default_pos)
 
     lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
@@ -86,6 +89,8 @@ class ur5e_arm():
         #service to check safety mode
         rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
+        #start subscriber for deadman enable
+        rospy.Subscriber('/enable_move',Bool,self.enable_callback)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -134,14 +139,6 @@ class ur5e_arm():
         self.current_daq_rel_positions *= joint_inversion
         self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
 
-        #DEBUG
-        # self.daq_pos_debug.data = self.current_daq_rel_positions
-        # self.daq_pos_wraped_debug.data = self.current_daq_rel_positions_waraped
-        # self.daq_pos_pub.publish(self.daq_pos_debug)
-        # self.daq_pos_wraped_pub.publish(self.daq_pos_wraped_debug)
-
-        # np.around(self.current_daq_rel_positions,decimals=3)
-
     # def wrap_relative_angles(self):
     def safety_callback(self, data):
         '''Detect when safety stop is triggered'''
@@ -154,6 +151,10 @@ class ur5e_arm():
 
             #wait for user to fix the stop
             # self.user_wait_safety_stop()
+
+    def enable_callback(self, data):
+        '''Detects the software enable/disable safety switch'''
+        self.enabled = data.data
 
     def user_wait_safety_stop(self):
         #wait for user to fix the stop
@@ -197,10 +198,14 @@ class ur5e_arm():
         self.control_arm_ref_config = deepcopy(self.control_arm_def_config)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
-    def set_current_config_as_control_ref_config(self, interactive = True):
+    def set_current_config_as_control_ref_config(self,
+                                                 reset_robot_ref_config_to_current = True,
+                                                 interactive = True):
         if interactive:
             _ = raw_input("Hit enter when ready to set the control arm ref pos.")
         self.control_arm_ref_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        if reset_robot_ref_config_to_current:
+            self.robot_ref_pos = deepcopy(self.current_joint_positions)
         print("Control Arm Ref Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
     def capture_control_arm_ref_position(self, interactive = True):
@@ -370,7 +375,9 @@ class ur5e_arm():
         self.stop_arm()
         return reached_pos
 
-    def move(self, capture_start_as_ref_pos = False):
+    def move(self,
+             capture_start_as_ref_pos = False,
+             dialoge_enabled = True):
         '''Main control loop for teleoperation use.'''
         if not self.ready_to_move():
             self.user_prompt_ready_to_move()
@@ -386,12 +393,12 @@ class ur5e_arm():
         rate = rospy.Rate(500)
 
         if capture_start_as_ref_pos:
-            self.set_current_config_as_control_ref_config()
-        print('safety_mode',self.safety_mode)
-        while not self.shutdown and self.safety_mode == 1: #chutdown is set on ctrl-c.
+            self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
+        # print('safety_mode',self.safety_mode)
+        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
-            np.add(self.default_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
             # self.ref_pos.data = ref_pos
             # self.ref_pos_pub.publish(self.ref_pos)
 
@@ -427,6 +434,28 @@ class ur5e_arm():
             rate.sleep()
         self.stop_arm()
 
+    def run(self):
+        '''Run runs the move routine repeatedly, accounting for the
+        enable/disable switch'''
+
+        print('Put the control arm in start configuration.')
+        print('Depress and hold the deadman switch when ready to move.')
+
+        while not rospy.is_shutdown():
+            #check safety
+            if not self.safety_mode == 1:
+                time.sleep(0.01)
+                continue
+            #check enabled
+            if not self.enabled:
+                time.sleep(0.01)
+                continue
+            #start moving
+            print('Starting Free Movement')
+            self.move(capture_start_as_ref_pos = True,
+                      dialoge_enabled = False)
+
+
 
 if __name__ == "__main__":
     #This script is included for testing purposes
@@ -435,6 +464,7 @@ if __name__ == "__main__":
     arm = ur5e_arm(test_control_signal=False, conservative_joint_lims = False)
     time.sleep(1)
     arm.stop_arm()
+
 
     # print(arm.remote_control_running().program_running)
     # raw_input('waiting')
@@ -455,7 +485,8 @@ if __name__ == "__main__":
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
     raw_input("Hit enter when ready to move")
     # arm.move()
-    arm.move(capture_start_as_ref_pos=True)
+    # arm.move(capture_start_as_ref_pos=True)
+    arm.run()
 
     arm.stop_arm()
 
