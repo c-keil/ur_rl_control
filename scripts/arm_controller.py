@@ -149,6 +149,7 @@ class ur5e_arm():
             #send a breaking command
             print('\nFault Detected, sending stop command\n')
             self.stop_arm() #set commanded velocities to zero
+            print('***Please clear the fault and restart the UR-Cap program before continuing***')
 
             #wait for user to fix the stop
             # self.user_wait_safety_stop()
@@ -304,7 +305,47 @@ class ur5e_arm():
         print('remote : ',self.remote_control_running().program_running)
         return self.remote_control_running().program_running
 
-    def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False):
+    def move_to_robost(self,
+                position,
+                speed = 0.25,
+                error_thresh = 0.01,
+                override_initial_joint_lims = False,
+                require_enable = False):
+        '''Calls the move_to method as necessary to ensure that the goal position
+        is reached, accounting for interruptions due to safety faults, and the
+        enable deadman if require_enable is selected'''
+
+        if require_enable:
+            print('Depress and hold the deadman switch when ready to move.')
+            print('Release to stop')
+
+        while not rospy.is_shutdown():
+            #check safety
+            if not self.ready_to_move():
+                self.user_prompt_ready_to_move()
+                continue
+            #check enabled
+            if not self.enabled:
+                time.sleep(0.01)
+                continue
+            #start moving
+            print('Starting Trajectory')
+            result = self.move_to(position,
+                                  speed = speed,
+                                  error_thresh = error_thresh,
+                                  override_initial_joint_lims = override_initial_joint_lims,
+                                  require_enable = require_enable)
+            if result:
+                break
+        print('Reached Goal')
+
+
+    def move_to(self,
+                position,
+                speed = 0.25,
+                error_thresh = 0.01,
+                override_initial_joint_lims = False,
+                require_enable = False):
         '''CAUTION - use joint lim override with extreme caution. Intended to
         allow movement from outside the lims back to acceptable position.
 
@@ -351,6 +392,10 @@ class ur5e_arm():
         start_time = time.time()
         reached_pos = False
         while not self.shutdown and not rospy.is_shutdown() and self.safety_mode == 1: #chutdown is set on ctrl-c.
+            if require_enable and not self.enabled:
+                print('Lost Enable, stopping')
+                break
+
             loop_time = time.time()-start_time
             if loop_time < end_time:
                 pos_ref[:] = [traj[i](loop_time) for i in range(6)]
@@ -473,7 +518,13 @@ if __name__ == "__main__":
     # print(arm.remote_control_running().program_running)
 
     # arm.calibrate_control_arm_zero_position(interactive = True)
-    arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
+    # print(arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True))
+    print(arm.move_to_robost(arm.default_pos,
+                             speed = 0.1,
+                             override_initial_joint_lims=True,
+                             require_enable = True))
+
+
     # arm.capture_control_arm_ref_position()
     # print("Current Arm Position")
     # print(arm.current_joint_positions)
