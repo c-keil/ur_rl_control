@@ -40,6 +40,7 @@ class ur5e_arm():
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
     robot_ref_pos = deepcopy(default_pos)
+    saved_ref_pos = None
 
     lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
@@ -311,6 +312,7 @@ class ur5e_arm():
         configuration without teleop input. Intended for testing or to reach
         present initial positions, etc.'''
 
+        #ensure safety sqitch is not enabled
         if not self.ready_to_move():
             self.user_prompt_ready_to_move()
 
@@ -348,7 +350,7 @@ class ur5e_arm():
         rate = rospy.Rate(500) #lim loop to 500 hz
         start_time = time.time()
         reached_pos = False
-        while True and not self.shutdown: #chutdown is set on ctrl-c.
+        while not self.shutdown and not rospy.is_shutdown() and self.safety_mode == 1: #chutdown is set on ctrl-c.
             loop_time = time.time()-start_time
             if loop_time < end_time:
                 pos_ref[:] = [traj[i](loop_time) for i in range(6)]
