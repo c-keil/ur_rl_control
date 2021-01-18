@@ -34,6 +34,7 @@ class ur5e_arm():
     shutdown = False
     enabled = False
     joint_reorder = [2,1,0,3,4,5]
+    breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
     # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
@@ -278,8 +279,30 @@ class ur5e_arm():
         print('Stopped')
         # self.stop_arm()
 
-    def stop_arm(self):
-        '''commands zero velocity until sure the arm is stopped'''
+    def stop_arm(self, safe = False):
+        '''Commands zero velocity until sure the arm is stopped. If safe is False
+        commands immediate stop, if set to a positive value, will stop gradually'''
+
+        if safe:
+            loop_rate = rospy.Rate(200)
+            start_time = time.time()
+            start_vel = deepcopy(self.current_joint_velocities)
+            max_accel = np.abs(start_vel/self.breaking_stop_time)
+            vel_mask = np.ones(6)
+            vel_mask[start_vel < 0.0] = -1
+            while np.any(np.abs(self.current_joint_velocities)>0.0001) and not rospy.is_shutdown():
+                command_vels = [0.0]*6
+                loop_time = time.time() - start_time
+                for joint in range(len(command_vels)):
+                    vel = start_vel[joint] - vel_mask[joint]*max_accel[joint]*loop_time
+                    if vel * vel_mask[joint] < 0:
+                        vel = 0
+                    command_vels[joint] = vel
+                self.vel_pub.publish(Float64MultiArray(data = command_vels))
+                if np.sum(command_vels) == 0:
+                    break
+                loop_rate.sleep()
+
         while np.any(np.abs(self.current_joint_velocities)>0.0001):
             self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
@@ -419,7 +442,7 @@ class ur5e_arm():
             rate.sleep()
 
         #make sure arm stops
-        self.stop_arm()
+        self.stop_arm(safe = True)
         return reached_pos
 
     def move(self,
@@ -479,7 +502,7 @@ class ur5e_arm():
             self.vel_pub.publish(self.vel_ref)
             #wait
             rate.sleep()
-        self.stop_arm()
+        self.stop_arm(safe = True)
 
     def run(self):
         '''Run runs the move routine repeatedly, accounting for the
