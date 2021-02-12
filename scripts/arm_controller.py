@@ -29,6 +29,8 @@ two_pi = np.pi*2
 # # TODO Arm class
     #Breaking at shutdown
     #Follow traj
+test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
+# test_point = np.array([0.0,0.2,0.0,1]).reshape(-1,1)
 
 class ur5e_arm():
     '''Defines velocity based controller for ur5e arm for use in teleop project
@@ -77,7 +79,7 @@ class ur5e_arm():
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
-        self.z_axis_lim = 0.1 #10cm temp
+        self.z_axis_lim = 0.0 #10cm temp
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -491,11 +493,17 @@ class ur5e_arm():
                 # print(self.current_joint_positions)
                 # print(ref_pos)
                 pose = forward(ref_pos)
+                test_point_pos = np.dot(pose,test_point).reshape(-1)
+                # print(test_point_pos[2])
                 # print(pose)
-                if pose[2,3] < self.z_axis_lim:
+                # if pose[2,3] < self.z_axis_lim:
+                if test_point_pos[2] < self.z_axis_lim:
                     # print('Z axis overrun: {}'.format(pose[2,3]))
                     #saturate pose
-                    pose[2,3] = self.z_axis_lim
+                    diff = pose[2,3] - test_point_pos[2]
+                    # print(diff)
+                    pose[2,3] = self.z_axis_lim + diff
+                    # pose[2,3] = self.z_axis_lim
                     #get joint ref
                     new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
                     # print(new_ref-self.current_joint_positions)
@@ -576,6 +584,8 @@ if __name__ == "__main__":
     # if 'y'==raw_input('Execute Move? (y/n)'):
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
+    pose = forward(arm.current_joint_positions)
+    print(pose)
     raw_input("Hit enter when ready to move")
     # arm.move()
     # arm.move(capture_start_as_ref_pos=True)
