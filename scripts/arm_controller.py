@@ -5,6 +5,9 @@ from copy import deepcopy
 import time
 from scipy.interpolate import InterpolatedUnivariateSpline
 
+from ur_kinematics.ur_kin_py import forward
+from kinematics import analytical_ik, nearest_ik_solution
+
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from ur5teleop.msg import jointdata, Joint
@@ -71,6 +74,10 @@ class ur5e_arm():
         if conservative_joint_lims:
             self.lower_lims = self.conservative_lower_lims
             self.upper_lims = self.conservative_upper_lims
+
+        #keepout (limmited to z axis height for now)
+        self.keepout_enabled = True
+        self.z_axis_lim = 0.1 #10cm temp
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -464,36 +471,46 @@ class ur5e_arm():
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
+            self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
             np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            # self.ref_pos.data = ref_pos
-            # self.ref_pos_pub.publish(self.ref_pos)
+            #
 
             #enforce joint lims
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
 
+            #check that it is not hitting the table
+            if self.keepout_enabled:
+                #run forward kinematcs
+                # pose = forward(self.current_joint_positions)
+                # print(self.current_daq_rel_positions_waraped)
+                # print(self.robot_ref_pos)
+                # print(self.current_joint_positions)
+                # print(ref_pos)
+                pose = forward(ref_pos)
+                # print(pose)
+                if pose[2,3] < self.z_axis_lim:
+                    # print('Z axis overrun: {}'.format(pose[2,3]))
+                    #saturate pose
+                    pose[2,3] = self.z_axis_lim
+                    #get joint ref
+                    new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+                    # print(new_ref-self.current_joint_positions)
+                    ref_pos = new_ref
+            self.ref_pos.data = ref_pos
+            self.daq_pos_pub.publish(self.ref_pos)
+
             #inplace error calculation
             np.subtract(ref_pos, self.current_joint_positions, position_error)
-            # np.abs(position_error,out=absolute_position_error)
-            # #if position error is very large, we should slowly approach the target ...
-            # #maybe we should use a filter to do this to move a small amount in the direction
-            # np.subtract(absolute_position_error,max_pos_error,out=position_error_exceeded_by)
-            # max_error = np.max(position_error_exceeded_by)
-            # if max_error > 0: #scale error signal down
-            #     position_error *= max_pos_error/max_error
 
-            # print(position_error)
+
             #calculate vel signal
-            # np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
             vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
             #enforce max velocity setting
-            # np.clip(vel_ref_array,-joint_vel_lim,joint_vel_lim,vel_ref_array)
-
-            # np.clip(vel_ref_array,-low_joint_vel_lim,low_joint_vel_lim,vel_ref_array)
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             #publish
