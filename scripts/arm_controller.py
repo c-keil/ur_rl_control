@@ -32,8 +32,8 @@ two_pi = np.pi*2
 test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
 # test_point = np.array([0.0,0.2,0.0,1]).reshape(-1,1)
 gripper_collision_points =  np.array([[0.04, 0.0, -0.21, 1.0], #fingertip
-                                      [0.05, 0.04, 0.9,  1.0],  #hydraulic outputs
-                                      [0.05, -0.04, 0.9,  1.0]]).T
+                                      [0.05, 0.04, 0.09,  1.0],  #hydraulic outputs
+                                      [0.05, -0.04, 0.09,  1.0]]).T
 class ur5e_arm():
     '''Defines velocity based controller for ur5e arm for use in teleop project
     '''
@@ -78,6 +78,8 @@ class ur5e_arm():
     current_daq_rel_positions = np.zeros(6) #current_daq_positions - control_arm_ref_config
     current_daq_rel_positions_waraped = np.zeros(6)
 
+    first_daq_callback = True
+
     def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
@@ -87,7 +89,7 @@ class ur5e_arm():
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
-        self.z_axis_lim = -0.37 # floor #0.0 #table
+        self.z_axis_lim = -0.37 + 0.1# floor #0.0 #table
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -156,7 +158,7 @@ class ur5e_arm():
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         self.current_daq_velocities *= joint_inversion #account for diferent conventions
 
-        if np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error:
+        if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
             print('stopping arm - encoder error!')
             print('Daq position change is too high')
             print('Previous Positions:\n{}'.format(previous_positions))
@@ -471,6 +473,27 @@ class ur5e_arm():
         self.stop_arm(safe = True)
         return reached_pos
 
+    def return_collison_free_config(self, reference_positon):
+        '''takes the proposed set of joint positions for the real robot and
+        checks the forward kinematics for collisions with the floor plane and the
+        defined gripper points. Returns the neares position with the same orientation
+        that is not violating the floor constraint.'''
+        pose = forward(reference_positon)
+        collision_positions = np.dot(pose, gripper_collision_points)
+
+        min_point = np.argmin(collision_positions[2,:])
+        collision = collision_positions[2,min_point] < self.z_axis_lim
+        if collision:
+            # print('Z axis overrun: {}'.format(pose[2,3]))
+            #saturate pose
+            diff = pose[2,3] - collision_positions[2][min_point]
+            # print(diff)
+            pose[2,3] = self.z_axis_lim + diff
+            # pose[2,3] = self.z_axis_lim
+            #get joint ref
+            reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+        return reference_positon
+
     def move(self,
              capture_start_as_ref_pos = False,
              dialoge_enabled = True):
@@ -503,28 +526,18 @@ class ur5e_arm():
 
             #check that it is not hitting the table/floor
             if self.keepout_enabled:
-                #run forward kinematcs
-                # pose = forward(self.current_joint_positions)
-                # print(self.current_daq_rel_positions_waraped)
-                # print(self.robot_ref_pos)
-                # print(self.current_joint_positions)
-                # print(ref_pos)
-                pose = forward(ref_pos)
-                test_point_pos = np.dot(pose, test_point).reshape(-1)
-                # print(test_point_pos[2])
-                # print(pose)
-                # if pose[2,3] < self.z_axis_lim:
-                if test_point_pos[2] < self.z_axis_lim:
-                    # print('Z axis overrun: {}'.format(pose[2,3]))
-                    #saturate pose
-                    diff = pose[2,3] - test_point_pos[2]
-                    # print(diff)
-                    pose[2,3] = self.z_axis_lim + diff
-                    # pose[2,3] = self.z_axis_lim
-                    #get joint ref
-                    new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
-                    # print(new_ref-self.current_joint_positions)
-                    ref_pos = new_ref
+                # #run forward kinematcs
+                # pose = forward(ref_pos)
+                # test_point_pos = np.dot(pose, test_point).reshape(-1)
+                # if test_point_pos[2] < self.z_axis_lim:
+                #     #saturate pose
+                #     diff = pose[2,3] - test_point_pos[2]
+                #     pose[2,3] = self.z_axis_lim + diff
+                #     #get joint ref
+                #     new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+                #     ref_pos = new_ref
+                ref_pos = self.return_collison_free_config(ref_pos)
+
             self.ref_pos.data = ref_pos
             self.daq_pos_pub.publish(self.ref_pos)
 
@@ -534,7 +547,7 @@ class ur5e_arm():
 
             #calculate vel signal
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
-            vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
+            # vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
