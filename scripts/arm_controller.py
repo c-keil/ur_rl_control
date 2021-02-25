@@ -31,7 +31,9 @@ two_pi = np.pi*2
     #Follow traj
 test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
 # test_point = np.array([0.0,0.2,0.0,1]).reshape(-1,1)
-
+gripper_collision_points =  np.array([[0.04, 0.0, -0.21, 1.0], #fingertip
+                                      [0.05, 0.04, 0.9,  1.0],  #hydraulic outputs
+                                      [0.05, -0.04, 0.9,  1.0]]).T
 class ur5e_arm():
     '''Defines velocity based controller for ur5e arm for use in teleop project
     '''
@@ -40,6 +42,12 @@ class ur5e_arm():
     enabled = False
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
+
+    #throws an error and stops the arm if there is a position discontinuity in the
+    #encoder input freater than the specified threshold
+    #with the current settings of 100hz sampling, 0.1 radiands corresponds to
+    #~10 rps velocity, which is unlikely to happen unless the encoder input is wrong
+    position_jump_error = 0.1
     # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
@@ -79,7 +87,7 @@ class ur5e_arm():
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
-        self.z_axis_lim = 0.0 #10cm temp
+        self.z_axis_lim = -0.37 # floor #0.0 #table
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -143,10 +151,19 @@ class ur5e_arm():
         self.current_joint_velocities[self.joint_reorder] = data.velocity
 
     def daq_callback(self, data):
+        previous_positions = deepcopy(self.current_daq_positions)
         self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         self.current_daq_velocities *= joint_inversion #account for diferent conventions
-        np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
+
+        if np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error:
+            print('stopping arm - encoder error!')
+            print('Daq position change is too high')
+            print('Previous Positions:\n{}'.format(previous_positions))
+            print('New Positions:\n{}'.format(self.current_daq_positions))
+            self.shutdown_safe()
+        # np.subtract(,,out=) #update relative position
+        self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
         self.current_daq_rel_positions *= joint_inversion
         self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
 
@@ -484,7 +501,7 @@ class ur5e_arm():
             #enforce joint lims
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
 
-            #check that it is not hitting the table
+            #check that it is not hitting the table/floor
             if self.keepout_enabled:
                 #run forward kinematcs
                 # pose = forward(self.current_joint_positions)
@@ -493,7 +510,7 @@ class ur5e_arm():
                 # print(self.current_joint_positions)
                 # print(ref_pos)
                 pose = forward(ref_pos)
-                test_point_pos = np.dot(pose,test_point).reshape(-1)
+                test_point_pos = np.dot(pose, test_point).reshape(-1)
                 # print(test_point_pos[2])
                 # print(pose)
                 # if pose[2,3] < self.z_axis_lim:
