@@ -39,7 +39,8 @@ def listener():
     rospy.init_node('joint_listener', anonymous=True)
 
     rospy.Subscriber("joint_states", JointState, joint_state_callback)
-    rospy.Subscriber("daqdata_filtered", jointdata, daq_callback)
+    # rospy.Subscriber("daqdata_filtered", jointdata, daq_callback)
+    rospy.Subscriber("digital_data", jointdata, daq_callback)
     pub = rospy.Publisher("/joint_group_vel_controller/command",
                         Float64MultiArray,
                         queue_size=1)
@@ -62,17 +63,17 @@ def listener():
 
     # input("")
     # p_gain = 20.0
-    p_gain = 10.0
-    k_ff = 1.2
+    p_gain = 5.0
+    k_ff = 0.5
     # spin() simply keeps python from exiting until this node is stopped
     start_time = time.time()
     while time.time()-start_time < 10.0:
         # print("Goal: {}, Current {}".format(goal_postion,current_joint_states))
         relative_postion = absolute_ref_pos[0] - start_encoder_pos
-        goal_postion[5] = relative_postion
+        goal_postion[1] = relative_postion
         position_error = start_positon + goal_postion - current_joint_states
         # print(position_error)
-        feedforward_term[5] = k_ff*ref_vel[0]
+        feedforward_term[1] = k_ff*ref_vel[0]
         vel_ref_temp = p_gain*position_error + feedforward_term
         np.clip(vel_ref_temp,-vel_lim,vel_lim,vel_ref_temp)
         # print(vel_ref_temp)

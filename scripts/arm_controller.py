@@ -5,9 +5,16 @@ from copy import deepcopy
 import time
 from scipy.interpolate import InterpolatedUnivariateSpline
 
+from ur_kinematics.ur_kin_py import forward
+from kinematics import analytical_ik, nearest_ik_solution
+
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from ur5teleop.msg import jointdata, Joint
+from ur_dashboard_msgs.msg import SafetyMode
+from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
+from std_msgs.msg import Bool
+
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
 
@@ -22,19 +29,35 @@ two_pi = np.pi*2
 # # TODO Arm class
     #Breaking at shutdown
     #Follow traj
-
+test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
+# test_point = np.array([0.0,0.2,0.0,1]).reshape(-1,1)
+gripper_collision_points =  np.array([[0.04, 0.0, -0.21, 1.0], #fingertip
+                                      [0.05, 0.04, 0.09,  1.0],  #hydraulic outputs
+                                      [0.05, -0.04, 0.09,  1.0]]).T
 class ur5e_arm():
     '''Defines velocity based controller for ur5e arm for use in teleop project
     '''
+    safety_mode = -1
     shutdown = False
+    enabled = False
     joint_reorder = [2,1,0,3,4,5]
-    joint_p_gains = np.array([10.0]*6) #works up to at least 20 on wrist 3
+    breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
+
+    #throws an error and stops the arm if there is a position discontinuity in the
+    #encoder input freater than the specified threshold
+    #with the current settings of 100hz sampling, 0.1 radiands corresponds to
+    #~10 rps velocity, which is unlikely to happen unless the encoder input is wrong
+    position_jump_error = 0.1
+    # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
+    joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
+    robot_ref_pos = deepcopy(default_pos)
+    saved_ref_pos = None
 
     lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
-    upper_lims = (np.pi/180)*np.array([180.0, 0.0, 150.0, 0.0, 0.0, 270.0])
+    upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
@@ -55,12 +78,18 @@ class ur5e_arm():
     current_daq_rel_positions = np.zeros(6) #current_daq_positions - control_arm_ref_config
     current_daq_rel_positions_waraped = np.zeros(6)
 
+    first_daq_callback = True
+
     def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
 
         if conservative_joint_lims:
             self.lower_lims = self.conservative_lower_lims
             self.upper_lims = self.conservative_upper_lims
+
+        #keepout (limmited to z axis height for now)
+        self.keepout_enabled = True
+        self.z_axis_lim = -0.37 + 0.1# floor #0.0 #table
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -71,8 +100,18 @@ class ur5e_arm():
         else:
             rospy.Subscriber("daqdata_filtered", jointdata, self.daq_callback)
 
+        #start robot state subscriber (detects fault or estop press)
+        rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
         #joint feedback subscriber
         rospy.Subscriber("joint_states", JointState, self.joint_state_callback)
+        #service to check if robot program is running
+        rospy.wait_for_service('/ur_hardware_interface/dashboard/program_running')
+        self.remote_control_running = rospy.ServiceProxy('ur_hardware_interface/dashboard/program_running', IsProgramRunning)
+        #service to check safety mode
+        rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
+        self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
+        #start subscriber for deadman enable
+        rospy.Subscriber('/enable_move',Bool,self.enable_callback)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -103,27 +142,83 @@ class ur5e_arm():
         print(self.upper_lims)
         print(self.lower_lims)
 
+        if not self.ready_to_move():
+            print('User action needed before commands can be sent to the robot.')
+            self.user_prompt_ready_to_move()
+        else:
+            print('Ready to move')
+
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
 
     def daq_callback(self, data):
+        previous_positions = deepcopy(self.current_daq_positions)
         self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
         self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
         self.current_daq_velocities *= joint_inversion #account for diferent conventions
-        np.subtract(self.current_daq_positions,self.control_arm_ref_config,out=self.current_daq_rel_positions) #update relative position
+
+        if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
+            print('stopping arm - encoder error!')
+            print('Daq position change is too high')
+            print('Previous Positions:\n{}'.format(previous_positions))
+            print('New Positions:\n{}'.format(self.current_daq_positions))
+            self.shutdown_safe()
+        # np.subtract(,,out=) #update relative position
+        self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
         self.current_daq_rel_positions *= joint_inversion
         self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
 
-        #DEBUG
-        # self.daq_pos_debug.data = self.current_daq_rel_positions
-        # self.daq_pos_wraped_debug.data = self.current_daq_rel_positions_waraped
-        # self.daq_pos_pub.publish(self.daq_pos_debug)
-        # self.daq_pos_wraped_pub.publish(self.daq_pos_wraped_debug)
-
-        # np.around(self.current_daq_rel_positions,decimals=3)
-
     # def wrap_relative_angles(self):
+    def safety_callback(self, data):
+        '''Detect when safety stop is triggered'''
+        self.safety_mode = data.mode
+        if not data.mode == 1:
+            #estop or protective stop triggered
+            #send a breaking command
+            print('\nFault Detected, sending stop command\n')
+            self.stop_arm() #set commanded velocities to zero
+            print('***Please clear the fault and restart the UR-Cap program before continuing***')
+
+            #wait for user to fix the stop
+            # self.user_wait_safety_stop()
+
+    def enable_callback(self, data):
+        '''Detects the software enable/disable safety switch'''
+        self.enabled = data.data
+
+    def user_wait_safety_stop(self):
+        #wait for user to fix the stop
+        while not self.safety_mode == 1:
+            raw_input('Safety Stop or other stop condition enabled.\n Correct the fault, then hit enter to continue')
+
+    def ensure_safety_mode(self):
+        '''Blocks until the safety mode is 1 (normal)'''
+        while not self.safety_mode == 1:
+            raw_input('Robot safety mode is not normal, \ncheck the estop and correct any faults, then restart the external control program and hit enter. ')
+
+    def get_safety_mode(self):
+        '''Calls get safet mode service, does not return self.safety_mode, which is updated by the safety mode topic, but should be the same.'''
+        return self.safety_mode_proxy().safety_mode.mode
+
+    def ready_to_move(self):
+        '''returns true if the safety mode is 1 (normal) and the remote program is running'''
+        return self.get_safety_mode() == 1 and self.remote_control_running()
+
+    def user_prompt_ready_to_move(self):
+        '''Blocking dialog to get the user to reset the safety warnings and start the remote program'''
+        while True:
+            if not self.get_safety_mode() == 1:
+                print(self.get_safety_mode())
+                raw_input('Safety mode is not Normal. Please correct the fault, then hit enter.')
+            else:
+                break
+        while True:
+            if not self.remote_control_running():
+                raw_input('The remote control URCap program has been pause or was not started, please restart it, then hit enter.')
+            else:
+                break
+        print('\nRemote control program is running, and safety mode is Normal\n')
 
     def calibrate_control_arm_zero_position(self, interactive = True):
         '''Sets the control arm zero position to the current encoder joint states
@@ -134,10 +229,14 @@ class ur5e_arm():
         self.control_arm_ref_config = deepcopy(self.control_arm_def_config)
         print("Control Arm Default Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
-    def set_current_config_as_control_ref_config(self, interactive = True):
+    def set_current_config_as_control_ref_config(self,
+                                                 reset_robot_ref_config_to_current = True,
+                                                 interactive = True):
         if interactive:
             _ = raw_input("Hit enter when ready to set the control arm ref pos.")
         self.control_arm_ref_config = np.mod(deepcopy(self.current_daq_positions),np.pi*2)
+        if reset_robot_ref_config_to_current:
+            self.robot_ref_pos = deepcopy(self.current_joint_positions)
         print("Control Arm Ref Position Setpoint:\n{}\n".format(self.control_arm_def_config))
 
     def capture_control_arm_ref_position(self, interactive = True):
@@ -208,8 +307,30 @@ class ur5e_arm():
         print('Stopped')
         # self.stop_arm()
 
-    def stop_arm(self):
-        '''commands zero velocity until sure the arm is stopped'''
+    def stop_arm(self, safe = False):
+        '''Commands zero velocity until sure the arm is stopped. If safe is False
+        commands immediate stop, if set to a positive value, will stop gradually'''
+
+        if safe:
+            loop_rate = rospy.Rate(200)
+            start_time = time.time()
+            start_vel = deepcopy(self.current_joint_velocities)
+            max_accel = np.abs(start_vel/self.breaking_stop_time)
+            vel_mask = np.ones(6)
+            vel_mask[start_vel < 0.0] = -1
+            while np.any(np.abs(self.current_joint_velocities)>0.0001) and not rospy.is_shutdown():
+                command_vels = [0.0]*6
+                loop_time = time.time() - start_time
+                for joint in range(len(command_vels)):
+                    vel = start_vel[joint] - vel_mask[joint]*max_accel[joint]*loop_time
+                    if vel * vel_mask[joint] < 0:
+                        vel = 0
+                    command_vels[joint] = vel
+                self.vel_pub.publish(Float64MultiArray(data = command_vels))
+                if np.sum(command_vels) == 0:
+                    break
+                loop_rate.sleep()
+
         while np.any(np.abs(self.current_joint_velocities)>0.0001):
             self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
@@ -231,13 +352,61 @@ class ur5e_arm():
                     print('Joint {}: Position {:.5} exceeds upper bound {:.5}'.format(i,pos,self.lower_lims[i]))
             return False
 
-    def move_to(self, position, speed = 0.25, error_thresh = 0.01, override_initial_joint_lims = False):
+    def remote_program_running(self):
+        print('remote : ',self.remote_control_running().program_running)
+        return self.remote_control_running().program_running
+
+    def move_to_robost(self,
+                position,
+                speed = 0.25,
+                error_thresh = 0.01,
+                override_initial_joint_lims = False,
+                require_enable = False):
+        '''Calls the move_to method as necessary to ensure that the goal position
+        is reached, accounting for interruptions due to safety faults, and the
+        enable deadman if require_enable is selected'''
+
+        if require_enable:
+            print('Depress and hold the deadman switch when ready to move.')
+            print('Release to stop')
+
+        while not rospy.is_shutdown():
+            #check safety
+            if not self.ready_to_move():
+                self.user_prompt_ready_to_move()
+                continue
+            #check enabled
+            if not self.enabled:
+                time.sleep(0.01)
+                continue
+            #start moving
+            print('Starting Trajectory')
+            result = self.move_to(position,
+                                  speed = speed,
+                                  error_thresh = error_thresh,
+                                  override_initial_joint_lims = override_initial_joint_lims,
+                                  require_enable = require_enable)
+            if result:
+                break
+        print('Reached Goal')
+
+
+    def move_to(self,
+                position,
+                speed = 0.25,
+                error_thresh = 0.01,
+                override_initial_joint_lims = False,
+                require_enable = False):
         '''CAUTION - use joint lim override with extreme caution. Intended to
         allow movement from outside the lims back to acceptable position.
 
         Defines a simple joing controller to bring the arm to a desired
         configuration without teleop input. Intended for testing or to reach
         present initial positions, etc.'''
+
+        #ensure safety sqitch is not enabled
+        if not self.ready_to_move():
+            self.user_prompt_ready_to_move()
 
         #define max speed slow for safety
         if speed > 0.5:
@@ -273,7 +442,11 @@ class ur5e_arm():
         rate = rospy.Rate(500) #lim loop to 500 hz
         start_time = time.time()
         reached_pos = False
-        while True and not self.shutdown: #chutdown is set on ctrl-c.
+        while not self.shutdown and not rospy.is_shutdown() and self.safety_mode == 1: #chutdown is set on ctrl-c.
+            if require_enable and not self.enabled:
+                print('Lost Enable, stopping')
+                break
+
             loop_time = time.time()-start_time
             if loop_time < end_time:
                 pos_ref[:] = [traj[i](loop_time) for i in range(6)]
@@ -287,7 +460,7 @@ class ur5e_arm():
                     break
 
             position_error = pos_ref - self.current_joint_positions
-            vel_ref_temp = self.joint_p_gains*position_error
+            vel_ref_temp = self.joint_p_gains_varaible*position_error
             #enforce max velocity setting
             np.clip(vel_ref_temp,-joint_vel_lim,joint_vel_lim,vel_ref_temp)
             self.vel_ref.data = vel_ref_temp
@@ -297,12 +470,36 @@ class ur5e_arm():
             rate.sleep()
 
         #make sure arm stops
-        self.stop_arm()
+        self.stop_arm(safe = True)
         return reached_pos
 
-    def move(self, capture_start_as_ref_pos = False):
-        '''TODO Implement main control loop for teleoperation use. '''
-        # raise NotImplementedError()
+    def return_collison_free_config(self, reference_positon):
+        '''takes the proposed set of joint positions for the real robot and
+        checks the forward kinematics for collisions with the floor plane and the
+        defined gripper points. Returns the neares position with the same orientation
+        that is not violating the floor constraint.'''
+        pose = forward(reference_positon)
+        collision_positions = np.dot(pose, gripper_collision_points)
+
+        min_point = np.argmin(collision_positions[2,:])
+        collision = collision_positions[2,min_point] < self.z_axis_lim
+        if collision:
+            # print('Z axis overrun: {}'.format(pose[2,3]))
+            #saturate pose
+            diff = pose[2,3] - collision_positions[2][min_point]
+            # print(diff)
+            pose[2,3] = self.z_axis_lim + diff
+            # pose[2,3] = self.z_axis_lim
+            #get joint ref
+            reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+        return reference_positon
+
+    def move(self,
+             capture_start_as_ref_pos = False,
+             dialoge_enabled = True):
+        '''Main control loop for teleoperation use.'''
+        if not self.ready_to_move():
+            self.user_prompt_ready_to_move()
 
         max_pos_error = 0.5 #radians/sec
         low_joint_vel_lim = 0.5
@@ -315,36 +512,43 @@ class ur5e_arm():
         rate = rospy.Rate(500)
 
         if capture_start_as_ref_pos:
-            self.set_current_config_as_control_ref_config()
-
-        while True and not self.shutdown: #chutdown is set on ctrl-c.
+            self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
+            self.current_daq_rel_positions_waraped = np.zeros(6)
+        # print('safety_mode',self.safety_mode)
+        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             #get ref position inplace - avoids repeatedly declaring new array
             # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
-            np.add(self.default_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            # self.ref_pos.data = ref_pos
-            # self.ref_pos_pub.publish(self.ref_pos)
+            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            #
 
             #enforce joint lims
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
 
+            #check that it is not hitting the table/floor
+            if self.keepout_enabled:
+                # #run forward kinematcs
+                # pose = forward(ref_pos)
+                # test_point_pos = np.dot(pose, test_point).reshape(-1)
+                # if test_point_pos[2] < self.z_axis_lim:
+                #     #saturate pose
+                #     diff = pose[2,3] - test_point_pos[2]
+                #     pose[2,3] = self.z_axis_lim + diff
+                #     #get joint ref
+                #     new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+                #     ref_pos = new_ref
+                ref_pos = self.return_collison_free_config(ref_pos)
+
+            self.ref_pos.data = ref_pos
+            self.daq_pos_pub.publish(self.ref_pos)
+
             #inplace error calculation
             np.subtract(ref_pos, self.current_joint_positions, position_error)
-            # np.abs(position_error,out=absolute_position_error)
-            # #if position error is very large, we should slowly approach the target ...
-            # #maybe we should use a filter to do this to move a small amount in the direction
-            # np.subtract(absolute_position_error,max_pos_error,out=position_error_exceeded_by)
-            # max_error = np.max(position_error_exceeded_by)
-            # if max_error > 0: #scale error signal down
-            #     position_error *= max_pos_error/max_error
 
-            # print(position_error)
+
             #calculate vel signal
-            # np.multiply(position_error,self.joint_p_gains,out=vel_ref_array)
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
+            # vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
             #enforce max velocity setting
-            # np.clip(vel_ref_array,-joint_vel_lim,joint_vel_lim,vel_ref_array)
-
-            # np.clip(vel_ref_array,-low_joint_vel_lim,low_joint_vel_lim,vel_ref_array)
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             #publish
@@ -353,19 +557,52 @@ class ur5e_arm():
             self.vel_pub.publish(self.vel_ref)
             #wait
             rate.sleep()
-        self.stop_arm()
+        self.stop_arm(safe = True)
+
+    def run(self):
+        '''Run runs the move routine repeatedly, accounting for the
+        enable/disable switch'''
+
+        print('Put the control arm in start configuration.')
+        print('Depress and hold the deadman switch when ready to move.')
+
+        while not rospy.is_shutdown():
+            #check safety
+            if not self.safety_mode == 1:
+                time.sleep(0.01)
+                continue
+            #check enabled
+            if not self.enabled:
+                time.sleep(0.01)
+                continue
+            #start moving
+            print('Starting Free Movement')
+            self.move(capture_start_as_ref_pos = True,
+                      dialoge_enabled = False)
+
 
 
 if __name__ == "__main__":
     #This script is included for testing purposes
     print("starting")
 
-    arm = ur5e_arm(test_control_signal=False)
+    arm = ur5e_arm(test_control_signal=False, conservative_joint_lims = False)
     time.sleep(1)
     arm.stop_arm()
 
+
+    # print(arm.remote_control_running().program_running)
+    # raw_input('waiting')
+    # print(arm.remote_control_running().program_running)
+
     # arm.calibrate_control_arm_zero_position(interactive = True)
-    arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True)
+    # print(arm.move_to(arm.default_pos, speed = 0.1, override_initial_joint_lims=True))
+    print(arm.move_to_robost(arm.default_pos,
+                             speed = 0.1,
+                             override_initial_joint_lims=True,
+                             require_enable = True))
+
+
     # arm.capture_control_arm_ref_position()
     # print("Current Arm Position")
     # print(arm.current_joint_positions)
@@ -377,9 +614,12 @@ if __name__ == "__main__":
     # if 'y'==raw_input('Execute Move? (y/n)'):
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
+    pose = forward(arm.current_joint_positions)
+    print(pose)
     raw_input("Hit enter when ready to move")
     # arm.move()
-    arm.move(capture_start_as_ref_pos=True)
+    # arm.move(capture_start_as_ref_pos=True)
+    arm.run()
 
     arm.stop_arm()
 
