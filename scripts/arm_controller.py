@@ -24,12 +24,13 @@ control_arm_saved_zero = np.array([0.51031649, 1.22624958, 3.31996918, 0.9312608
 #define initial state
 
 #joint inversion - accounts for encoder axes being inverted inconsistently
-joint_inversion = np.array([-1,-1,1,-1,-1,-1])
+joint_inversion = np.array([-1,-1,1,-1,-1,-1]) # analog encoder dummy arm
+#joint_inversion = np.array([1,1,-1,1,1,1]) # digital encoder dummy arm
 two_pi = np.pi*2
 # # TODO Arm class
     #Breaking at shutdown
     #Follow traj
-test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
+#test_point = np.array([0.04,0.0,-0.21,1]).reshape(-1,1)
 # test_point = np.array([0.0,0.2,0.0,1]).reshape(-1,1)
 gripper_collision_points =  np.array([[0.04, 0.0, -0.21, 1.0], #fingertip
                                       [0.05, 0.04, 0.09,  1.0],  #hydraulic outputs
@@ -56,7 +57,7 @@ class ur5e_arm():
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
 
-    lower_lims = (np.pi/180)*np.array([0.0, -100.0, 0.0, -180.0, -180.0, 90.0])
+    lower_lims = (np.pi/180)*np.array([0.0, -120.0, 0.0, -180.0, -180.0, 90.0])
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
@@ -89,7 +90,7 @@ class ur5e_arm():
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
-        self.z_axis_lim = -0.37 + 0.1# floor #0.0 #table
+        self.z_axis_lim = -0.37 # floor 0.095 #short table # #0.0 #table
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -168,6 +169,7 @@ class ur5e_arm():
         self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
         self.current_daq_rel_positions *= joint_inversion
         self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
+        self.first_daq_callback = False
 
     # def wrap_relative_angles(self):
     def safety_callback(self, data):
@@ -547,7 +549,7 @@ class ur5e_arm():
 
             #calculate vel signal
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
-            # vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
+            vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
