@@ -5,27 +5,36 @@ from copy import deepcopy
 import time
 from scipy.interpolate import InterpolatedUnivariateSpline
 
-from ur_kinematics.ur_kin_py import forward
+from ur_kinematics.ur_kin_py import forward, forward_link
 from kinematics import analytical_ik, nearest_ik_solution
 
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
+from geometry_msgs.msg import WrenchStamped
 from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
 
+# Import the module
+from urdf_parser_py.urdf import URDF
+from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
+from pykdl_utils.kdl_kinematics import KDLKinematics
+
+robot = URDF.from_xml_file("/home/ur5e/ur_ws/src/ur5e_admittance_control/config/ur5e.urdf")
+
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
 
 joint_vel_lim = 1.0
+sample_rate = 500
 control_arm_saved_zero = np.array([0.51031649, 1.22624958, 3.31996918, 0.93126088, 3.1199832, 9.78404331])
 
 #define initial state
 
 #joint inversion - accounts for encoder axes being inverted inconsistently
-joint_inversion = np.array([-1,-1,1,-1,-1,-1]) # analog encoder dummy arm
-#joint_inversion = np.array([1,1,-1,1,1,1]) # digital encoder dummy arm
+# joint_inversion = np.array([-1,-1,1,-1,-1,-1]) # analog encoder dummy arm
+joint_inversion = np.array([1,1,-1,1,1,1]) # digital encoder dummy arm
 two_pi = np.pi*2
 # # TODO Arm class
     #Breaking at shutdown
@@ -61,7 +70,9 @@ class ur5e_arm():
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-    max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+    # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+    max_joint_speeds = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
@@ -80,6 +91,32 @@ class ur5e_arm():
     current_daq_rel_positions_waraped = np.zeros(6)
 
     first_daq_callback = True
+
+    # define DH-parameters
+    DH_alpha = np.pi/2*np.array([0,1,0,0,1,-1])
+    DH_a = [0.0,0.0,-0.42500,-0.39225,0.0,0.0]
+    DH_d = [0.1625,0.0,0.0,0.1333,0.0997,0.0996]
+
+    # define local cylinder joint inertia matrix
+    J1l = np.matrix([[0.0103, 0, 0, 0], [0, 0.0103, 0, 0], [0, 0, 0.0067, 0], [0, 0, 0, 3.7]])
+    J2l = np.matrix([[0.1834, 0, 0, 0], [0, 0.6582, 0, 0], [0, 0, 0.4984, 0], [0, 0, 0, 8.393]])
+    J3l = np.matrix([[0.0065, 0, 0, 0], [0, 0.1352, 0, 0], [0, 0, 0.1351, 0], [0, 0, 0, 2.275]])
+    J4l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
+    J5l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
+    J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
+
+    inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
+    # inertia_offset = np.array([0.2, 0.2, 0.2, 0.1, 0.1, 0.1])
+
+    wrench = np.zeros(6)
+
+    tree = kdl_tree_from_urdf_model(robot)
+    # print tree.getNrOfSegments()
+
+    # forwawrd kinematics
+    chain = tree.getChain("base_link", "wrist_3_link")
+    # print chain.getNrOfJoints()
+    kdl_kin = KDLKinematics(robot, "base_link", "wrist_3_link")
 
     def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
@@ -105,6 +142,8 @@ class ur5e_arm():
         rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
         #joint feedback subscriber
         rospy.Subscriber("joint_states", JointState, self.joint_state_callback)
+        #wrench feedback
+        rospy.Subscriber("wrench", WrenchStamped, self.wrench_callback)
         #service to check if robot program is running
         rospy.wait_for_service('/ur_hardware_interface/dashboard/program_running')
         self.remote_control_running = rospy.ServiceProxy('ur_hardware_interface/dashboard/program_running', IsProgramRunning)
@@ -116,6 +155,10 @@ class ur5e_arm():
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
+                            Float64MultiArray,
+                            queue_size=1)
+
+        self.test_data_pub = rospy.Publisher("/test_data",
                             Float64MultiArray,
                             queue_size=1)
 
@@ -138,6 +181,8 @@ class ur5e_arm():
 
         self.velocity = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.vel_ref = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.test_data = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
 
         print("Joint Limmits: ")
         print(self.upper_lims)
@@ -152,6 +197,9 @@ class ur5e_arm():
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
+
+    def wrench_callback(self, data):
+        self.current_wrench = np.array([data.wrench.force.x, data.wrench.force.y, data.wrench.force.z, data.wrench.torque.x, data.wrench.torque.y, data.wrench.torque.z])
 
     def daq_callback(self, data):
         previous_positions = deepcopy(self.current_daq_positions)
@@ -506,12 +554,25 @@ class ur5e_arm():
         max_pos_error = 0.5 #radians/sec
         low_joint_vel_lim = 0.5
 
+        # impedance setting
+        zeta = 0.707
+        virtual_stiffness = 50.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
         position_error_exceeded_by = np.zeros(6)
         vel_ref_array = np.zeros(6)
         ref_pos = deepcopy(self.current_joint_positions)
         rate = rospy.Rate(500)
+
+        pose_kdl = np.zeros(6)
+        pose_rot = np.zeros(6)
+        wrench = np.zeros(6)
+        wrench_global = np.zeros(6)
+        joint_desired_torque = np.zeros(6)
+        inertia = np.zeros(6)
+        acc = np.zeros(6)
+        vr = np.zeros(6)
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
@@ -546,12 +607,58 @@ class ur5e_arm():
             #inplace error calculation
             np.subtract(ref_pos, self.current_joint_positions, position_error)
 
-
             #calculate vel signal
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
-            vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
+            # vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
+
+            # admittance control
+            # jacobian
+            Ja = self.kdl_kin.jacobian(self.current_joint_positions)
+
+            pose_kdl = self.kdl_kin.forward(self.current_joint_positions)
+            pose_rot = pose_kdl[:3,:3]
+
+            wrench = self.current_wrench
+            np.matmul(pose_rot, wrench[:3], out = wrench_global[:3])
+            np.matmul(pose_rot, wrench[3:], out = wrench_global[3:])
+            np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+
+            # joint inertia
+            T1tb = forward_link(np.array([self.current_joint_positions[0], self.DH_d[0], self.DH_a[0], self.DH_alpha[0]]))
+            T2t1 = forward_link(np.array([self.current_joint_positions[1], self.DH_d[1], self.DH_a[1], self.DH_alpha[1]]))
+            T3t2 = forward_link(np.array([self.current_joint_positions[2], self.DH_d[2], self.DH_a[2], self.DH_alpha[2]]))
+            T4t3 = forward_link(np.array([self.current_joint_positions[3], self.DH_d[3], self.DH_a[3], self.DH_alpha[3]]))
+            T5t4 = forward_link(np.array([self.current_joint_positions[4], self.DH_d[4], self.DH_a[4], self.DH_alpha[4]]))
+            T6t5 = forward_link(np.array([self.current_joint_positions[5], self.DH_d[5], self.DH_a[5], self.DH_alpha[5]]))
+
+            J6 = self.J6l
+            J5 = self.J5l + np.matmul(np.matmul(T6t5,J6),T6t5.transpose())
+            J4 = self.J4l + np.matmul(np.matmul(T5t4,J5),T5t4.transpose())
+            J3 = self.J3l + np.matmul(np.matmul(T4t3,J4),T4t3.transpose())
+            J2 = self.J2l + np.matmul(np.matmul(T3t2,J3),T3t2.transpose())
+            J1 = self.J1l + np.matmul(np.matmul(T2t1,J2),T2t1.transpose())
+
+            inertia[0] = J1[2,2]
+            inertia[1] = J2[2,2]
+            inertia[2] = J3[2,2]
+            inertia[3] = J4[2,2]
+            inertia[4] = J5[2,2]
+            inertia[5] = J6[2,2]
+
+            acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (inertia + self.inertia_offset)) * self.current_joint_velocities) / (inertia + self.inertia_offset)
+            np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
+            vr += acc / sample_rate
+
+            # vel_ref_array += acc / sample_rate
+            vel_ref_array[2] += vr[2]
+
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
+
+            # self.test_data.data = vr
+            # self.test_data.data = np.array([filtered_joint_desired_torque[2],joint_desired_torque[2],mixed_joint_torque[2],0.0,0.0,0.0])
+            self.test_data.data = np.array([vr[2],vel_ref_array[2],0.0,0.0,0.0,0.0])
+            self.test_data_pub.publish(self.test_data)
 
             #publish
             self.vel_ref.data = vel_ref_array
