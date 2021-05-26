@@ -71,7 +71,7 @@ class ur5e_arm():
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
-    max_joint_speeds = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
@@ -98,7 +98,7 @@ class ur5e_arm():
     DH_d = [0.1625,0.0,0.0,0.1333,0.0997,0.0996]
 
     # define local cylinder joint inertia matrix
-    J1l = np.matrix([[0.0103, 0, 0, 0], [0, 0.0103, 0, 0], [0, 0, 0.0067, 0], [0, 0, 0, 3.7]])
+    J1l = np.matrix([[0.0103, 0, 0, 0], [0, 0.0103, 0, 0], [0, 0, 0.0067, 0], [0, 0, 0, 3.700]])
     J2l = np.matrix([[0.1834, 0, 0, 0], [0, 0.6582, 0, 0], [0, 0, 0.4984, 0], [0, 0, 0, 8.393]])
     J3l = np.matrix([[0.0065, 0, 0, 0], [0, 0.1352, 0, 0], [0, 0, 0.1351, 0], [0, 0, 0, 2.275]])
     J4l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
@@ -651,6 +651,8 @@ class ur5e_arm():
 
             # vel_ref_array += acc / sample_rate
             vel_ref_array[2] += vr[2]
+            vel_ref_array[0] += vr[0]
+            vel_ref_array[1] += vr[1]
 
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
