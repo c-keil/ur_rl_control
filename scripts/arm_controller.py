@@ -556,7 +556,7 @@ class ur5e_arm():
 
         # impedance setting
         zeta = 0.707
-        virtual_stiffness = 50.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        virtual_stiffness = np.array([30.0, 30.0, 50.0, 50.0, 50.0, 50.0])
 
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
