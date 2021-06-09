@@ -5,6 +5,8 @@ from copy import deepcopy
 import time
 from scipy.interpolate import InterpolatedUnivariateSpline
 
+from filter import PythonBPF
+
 from ur_kinematics.ur_kin_py import forward, forward_link
 from kinematics import analytical_ik, nearest_ik_solution
 
@@ -91,6 +93,12 @@ class ur5e_arm():
     current_daq_rel_positions_waraped = np.zeros(6)
 
     first_daq_callback = True
+
+    # define bandpass filter parameters
+    fl = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    fh = [30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
+    fs = sample_rate
+    filter = PythonBPF(fs, fl, fh)
 
     # define DH-parameters
     DH_alpha = np.pi/2*np.array([0,1,0,0,1,-1])
@@ -556,7 +564,7 @@ class ur5e_arm():
 
         # impedance setting
         zeta = 0.707
-        virtual_stiffness = np.array([30.0, 30.0, 50.0, 50.0, 50.0, 50.0])
+        virtual_stiffness = np.array([50.0, 50.0, 50.0, 50.0, 50.0, 50.0])
 
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
@@ -568,11 +576,26 @@ class ur5e_arm():
         pose_kdl = np.zeros(6)
         pose_rot = np.zeros(6)
         wrench = np.zeros(6)
+        filtered_wrench = np.zeros(6)
         wrench_global = np.zeros(6)
         joint_desired_torque = np.zeros(6)
         inertia = np.zeros(6)
         acc = np.zeros(6)
         vr = np.zeros(6)
+
+        self.filter.calculate_initial_values(self.current_wrench)
+
+        Ja = self.kdl_kin.jacobian(self.current_joint_positions)
+        pose_kdl = self.kdl_kin.forward(self.current_joint_positions)
+        pose_rt = pose_kdl[:3,:3]
+        wrench = self.current_wrench
+        filtered_wrench = np.array(self.filter.filter(wrench))
+        np.matmul(pose_rt, filtered_wrench[:3], out = wrench_global[:3])
+        np.matmul(pose_rt, filtered_wrench[3:], out = wrench_global[3:])
+        np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+        recent_data_focus_coeff = 0.99
+        p = 1 / recent_data_focus_coeff
+        joint_torque_error = joint_desired_torque
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
@@ -619,9 +642,19 @@ class ur5e_arm():
             pose_rot = pose_kdl[:3,:3]
 
             wrench = self.current_wrench
-            np.matmul(pose_rot, wrench[:3], out = wrench_global[:3])
-            np.matmul(pose_rot, wrench[3:], out = wrench_global[3:])
+            filtered_wrench = np.array(self.filter.filter(wrench))
+            np.matmul(pose_rt, filtered_wrench[:3], out = wrench_global[:3])
+            np.matmul(pose_rt, filtered_wrench[3:], out = wrench_global[3:])
             np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+
+            if np.any(np.abs(position_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
+                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
+                flag = 1
+            else:
+                joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
+                p = (p - p ** 2 / (1 + p)) / recent_data_focus_coeff
+                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
+                flag = -1
 
             # joint inertia
             T1tb = forward_link(np.array([self.current_joint_positions[0], self.DH_d[0], self.DH_a[0], self.DH_alpha[0]]))
@@ -645,7 +678,7 @@ class ur5e_arm():
             inertia[4] = J5[2,2]
             inertia[5] = J6[2,2]
 
-            acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (inertia + self.inertia_offset)) * self.current_joint_velocities) / (inertia + self.inertia_offset)
+            acc = (joint_desired_torque_after_correction + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (inertia + self.inertia_offset)) * self.current_joint_velocities) / (inertia + self.inertia_offset)
             np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
             vr += acc / sample_rate
 
@@ -659,7 +692,7 @@ class ur5e_arm():
 
             # self.test_data.data = vr
             # self.test_data.data = np.array([filtered_joint_desired_torque[2],joint_desired_torque[2],mixed_joint_torque[2],0.0,0.0,0.0])
-            self.test_data.data = np.array([vr[2],vel_ref_array[2],0.0,0.0,0.0,0.0])
+            self.test_data.data = np.array([joint_desired_torque[2], joint_torque_error[2], joint_desired_torque_after_correction[2], flag, 0.0, 0.0])
             self.test_data_pub.publish(self.test_data)
 
             #publish
