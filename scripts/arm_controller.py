@@ -113,8 +113,8 @@ class ur5e_arm():
     J5l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
     J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
 
-    inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
-    # inertia_offset = np.array([0.2, 0.2, 0.2, 0.1, 0.1, 0.1])
+    # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
+    inertia_offset = np.array([5.0, 5.0, 5.0, 0.2, 0.2, 0.2])
 
     wrench = np.zeros(6)
 
@@ -563,8 +563,9 @@ class ur5e_arm():
         low_joint_vel_lim = 0.5
 
         # impedance setting
-        zeta = 0.707
-        virtual_stiffness = np.array([50.0, 50.0, 50.0, 50.0, 50.0, 50.0])
+        # zeta = 0.707
+        zeta = 1.0
+        virtual_stiffness = 50 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
@@ -611,7 +612,7 @@ class ur5e_arm():
             np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
 
             #check that it is not hitting the table/floor
-            if self.keepout_enabled:
+            # if self.keepout_enabled:
                 # #run forward kinematcs
                 # pose = forward(ref_pos)
                 # test_point_pos = np.dot(pose, test_point).reshape(-1)
@@ -622,7 +623,7 @@ class ur5e_arm():
                 #     #get joint ref
                 #     new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
                 #     ref_pos = new_ref
-                ref_pos = self.return_collison_free_config(ref_pos)
+                # ref_pos = self.return_collison_free_config(ref_pos)
 
             self.ref_pos.data = ref_pos
             self.daq_pos_pub.publish(self.ref_pos)
@@ -678,7 +679,7 @@ class ur5e_arm():
             inertia[4] = J5[2,2]
             inertia[5] = J6[2,2]
 
-            acc = (joint_desired_torque_after_correction + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (inertia + self.inertia_offset)) * self.current_joint_velocities) / (inertia + self.inertia_offset)
+            acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (inertia + self.inertia_offset)) * self.current_joint_velocities) / (inertia + self.inertia_offset)
             np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
             vr += acc / sample_rate
 
