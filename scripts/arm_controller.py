@@ -114,7 +114,7 @@ class ur5e_arm():
     J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
 
     # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
-    inertia_offset = np.array([5.0, 5.0, 5.0, 0.2, 0.2, 0.2])
+    inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
 
@@ -565,10 +565,12 @@ class ur5e_arm():
         # impedance setting
         # zeta = 0.707
         zeta = 1.0
-        virtual_stiffness = 50 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+        virtual_stiffness = 80 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
         virtual_stiffness_tool = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
         inertia_tool = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+
+        pin_damping = 0.05
 
         position_error = np.zeros(6)
         absolute_position_error = np.zeros(6)
@@ -607,6 +609,7 @@ class ur5e_arm():
         vel_tool = np.zeros(6)
         init_pos_tool = np.zeros(6)
         pos_tool = np.zeros(6)
+        torque_joint = np.zeros(6)
         init_pos_tool[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
         init_pos_tool[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
         init_pos_tool[5] = np.arctan2(RT[1,0]/np.cos(init_pos_tool[4]), RT[0,0]/np.cos(init_pos_tool[4])) # phi
@@ -728,8 +731,20 @@ class ur5e_arm():
             vd_tool += ad_tool / sample_rate
             # turn on or turn off rotation
             # vd_tool[3:5] = np.array([0,0])
-            np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
+            damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
+            # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
+            u,s,vh = np.linalg.svd(Ja)
+            print(s)
+            np.matmul(damped_psedu_inv, vd_tool, out = vd)
             np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
+
+            # joint space inertia
+            # force_tool = wg - virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool
+            # np.matmul(Ja.transpose(), force_tool, out = torque_joint)
+            # ad_joint = torque_joint / self.inertia_offset
+            # vd += ad_joint / sample_rate
+            # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
+            # unable to control a separate axis
 
             # vel_ref_array += acc / sample_rate
             # vel_ref_array[2] += vr[2]
