@@ -747,10 +747,10 @@ class ur5e_arm():
             # unable to control a separate axis
 
             # vel_ref_array += acc / sample_rate
-            # vel_ref_array[2] += vr[2]
-            # vel_ref_array[0] += vr[0]
-            # vel_ref_array[1] += vr[1]
-            vel_ref_array += vd
+            vel_ref_array[2] += vr[2]
+            vel_ref_array[0] += vr[0]
+            vel_ref_array[1] += vr[1]
+            # vel_ref_array += vd
 
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
