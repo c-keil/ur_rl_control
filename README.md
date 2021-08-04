@@ -5,9 +5,12 @@ Install scipy if you don't already have one
 
 `python -m pip install "scipy<=1.2.3"`
 
-Clone the configuration repository (calibration-devel branch):
+Clone the configuration repository (calibration-devel branch) to your workspace
 
 `git clone -b calibration_devel https://github.com/RoboticsCollaborative/universal_robot.git`
+
+Clone the hrl-kdl repository to your workspace
+`git clone https://github.com/gt-ros-pkg/hrl-kdl.git`
 
 ## Troubleshoot
 1. When building the ur_kinematics package, there is a chance you would see this error: `fatal error: pyconfig.h: No such file or directory`\
