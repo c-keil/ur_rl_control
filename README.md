@@ -1,5 +1,20 @@
 # Readme
 
+# Setup
+Install scipy if you don't already have one
+
+`python -m pip install "scipy<=1.2.3"`
+
+Clone the configuration repository (calibration-devel branch):
+
+`git clone -b calibration_devel https://github.com/RoboticsCollaborative/universal_robot.git`
+
+## Troubleshoot
+1. When building the ur_kinematics package, there is a chance you would see this error: `fatal error: pyconfig.h: No such file or directory`\
+You can add `export CPLUS_INCLUDE_PATH="$CPLUS_INCLUDE_PATH:/usr/include/python2.7/"
+`to your `.bashrc` file to solve the issue.
+
+
 # TODO
 
 -Add visuals for motion prediction, joint lommit indication, keepout zones, etc.
@@ -37,8 +52,8 @@ CAUTION: Check the initial joint configuration and make sure it is near the defa
 
 Launch the base ur_robot_driver with the correct vel controller and other def
 parameters with
-`roslaunch test_vel_controller ur5e_driver.launch`
+`roslaunch ur_teleop_controller ur5e_driver.launch`
 Start the daq node with:
 `rosrun ur5teleop daqnode.py`
 Start the controller node with:
-`rosrun test_vel_controller arm_controller.py`
+`rosrun ur_teleop_controller arm_controller.py`

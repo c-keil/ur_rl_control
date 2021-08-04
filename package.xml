@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>test_vel_controller</name>
+  <name>ur_teleop_controller</name>
   <version>0.0.0</version>
-  <description>The test_vel_controller package</description>
+  <description>The ur_teleop_controller package</description>
 
   <!-- One maintainer tag required, multiple allowed, one person per tag -->
   <!-- Example:  -->
@@ -61,6 +61,7 @@
   <exec_depend>rospy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python-rospkg</exec_depend>
 
 
   <!-- The export tag contains other, unspecified, tags -->

@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import rospy
+import rospkg
 import numpy as np
 from copy import deepcopy
 import time
@@ -23,7 +24,9 @@ from urdf_parser_py.urdf import URDF
 from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
 from pykdl_utils.kdl_kinematics import KDLKinematics
 
-robot = URDF.from_xml_file("/home/ur5e/ur_ws/src/ur5e_admittance_control/config/ur5e.urdf")
+r = rospkg.RosPack()
+path = r.get_path('ur_teleop_controller')
+robot = URDF.from_xml_file(path+"/config/ur5e.urdf")
 
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
