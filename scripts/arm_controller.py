@@ -568,7 +568,7 @@ class ur5e_arm():
         # impedance setting
         # zeta = 0.707
         zeta = 1.0
-        virtual_stiffness = 80 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+        virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
         virtual_stiffness_tool = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
         inertia_tool = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
