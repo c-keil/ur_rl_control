@@ -120,6 +120,7 @@ class ur5e_arm():
     inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
+    est_wrench_int_term = np.zeros(6)
 
     tree = kdl_tree_from_urdf_model(robot)
     # print tree.getNrOfSegments()
@@ -573,6 +574,11 @@ class ur5e_arm():
         virtual_stiffness_tool = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
         inertia_tool = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
 
+        end_effector_inertia = 0.45 * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+        est_wrench_global = np.zeros(6)
+        end_effector_vel = np.zeros(6)
+        momentum_observer_gain = 100
+
         pin_damping = 0.05
 
         position_error = np.zeros(6)
@@ -606,6 +612,8 @@ class ur5e_arm():
         p = 1 / recent_data_focus_coeff
         joint_torque_error = joint_desired_torque
         wrench_global_error = wrench_global
+        est_wrench_global = wrench_global
+        self.est_wrench_int_term = wrench_global / momentum_observer_gain
 
         vd_tool = np.zeros(6)
         vd = np.zeros(6)
@@ -665,7 +673,10 @@ class ur5e_arm():
             filtered_wrench = np.array(self.filter.filter(wrench))
             np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
             np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-            np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+            np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
+            self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
+            est_wrench_global = momentum_observer_gain * (-1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
+            np.matmul(Ja.transpose(), est_wrench_global, out = joint_desired_torque)
 
             # online joint torque error id
             if np.any(np.abs(position_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
@@ -759,8 +770,7 @@ class ur5e_arm():
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             # self.test_data.data = vr
-            # self.test_data.data = np.array([filtered_joint_desired_torque[2],joint_desired_torque[2],mixed_joint_torque[2],0.0,0.0,0.0])
-            self.test_data.data = np.array([joint_desired_torque[2], joint_torque_error[2], joint_desired_torque_after_correction[2], flag, 0.0, 0.0])
+            self.test_data.data = np.array([wrench_global[0],wrench_global[1],wrench_global[2],est_wrench_global[0],est_wrench_global[1],est_wrench_global[2]])
             self.test_data_pub.publish(self.test_data)
 
             #publish
