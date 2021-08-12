@@ -117,7 +117,7 @@ class ur5e_arm():
     J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
 
     # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
-    inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
+    inertia_offset = np.array([3.0, 3.0, 3.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
@@ -577,7 +577,7 @@ class ur5e_arm():
         end_effector_inertia = 0.45 * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
         est_wrench_global = np.zeros(6)
         end_effector_vel = np.zeros(6)
-        momentum_observer_gain = 100
+        momentum_observer_gain = 60
 
         pin_damping = 0.05
 
@@ -675,7 +675,7 @@ class ur5e_arm():
             np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
             np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
             self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
-            est_wrench_global = momentum_observer_gain * (-1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
+            est_wrench_global = momentum_observer_gain * (1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
             np.matmul(Ja.transpose(), est_wrench_global, out = joint_desired_torque)
 
             # online joint torque error id
@@ -748,7 +748,7 @@ class ur5e_arm():
             damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
             # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
             u,s,vh = np.linalg.svd(Ja)
-            print(s)
+            # print(s)
             np.matmul(damped_psedu_inv, vd_tool, out = vd)
             np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
@@ -770,7 +770,7 @@ class ur5e_arm():
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             # self.test_data.data = vr
-            self.test_data.data = np.array([wrench_global[0],wrench_global[1],wrench_global[2],est_wrench_global[0],est_wrench_global[1],est_wrench_global[2]])
+            self.test_data.data = np.array([wrench_global[0],vel_tool[2],wrench_global[2],est_wrench_global[0],est_wrench_global[1],est_wrench_global[2]])
             self.test_data_pub.publish(self.test_data)
 
             #publish
