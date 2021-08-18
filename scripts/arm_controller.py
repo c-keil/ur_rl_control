@@ -38,7 +38,6 @@ control_arm_saved_zero = np.array([0.51031649, 1.22624958, 3.31996918, 0.9312608
 #define initial state
 
 #joint inversion - accounts for encoder axes being inverted inconsistently
-# joint_inversion = np.array([-1,-1,1,-1,-1,-1]) # analog encoder dummy arm
 joint_inversion = np.array([1,1,-1,1,1,1]) # digital encoder dummy arm
 two_pi = np.pi*2
 # # TODO Arm class
@@ -65,11 +64,12 @@ class ur5e_arm():
     position_jump_error = 0.1
     # ains = np.array([10.0]*6) #works up to at least 20 on wrist 3
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
-    joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 1.0, 1.1, 1.1])
+    joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
+    daq_ref_pos = deepcopy(default_pos)
 
     lower_lims = (np.pi/180)*np.array([0.0, -120.0, 0.0, -180.0, -180.0, 90.0])
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
@@ -102,19 +102,6 @@ class ur5e_arm():
     fh = [30.0, 30.0, 30.0, 30.0, 30.0, 30.0]
     fs = sample_rate
     filter = PythonBPF(fs, fl, fh)
-
-    # define DH-parameters
-    DH_alpha = np.pi/2*np.array([0,1,0,0,1,-1])
-    DH_a = [0.0,0.0,-0.42500,-0.39225,0.0,0.0]
-    DH_d = [0.1625,0.0,0.0,0.1333,0.0997,0.0996]
-
-    # define local cylinder joint inertia matrix
-    J1l = np.matrix([[0.0103, 0, 0, 0], [0, 0.0103, 0, 0], [0, 0, 0.0067, 0], [0, 0, 0, 3.700]])
-    J2l = np.matrix([[0.1834, 0, 0, 0], [0, 0.6582, 0, 0], [0, 0, 0.4984, 0], [0, 0, 0, 8.393]])
-    J3l = np.matrix([[0.0065, 0, 0, 0], [0, 0.1352, 0, 0], [0, 0, 0.1351, 0], [0, 0, 0, 2.275]])
-    J4l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
-    J5l = np.matrix([[0.0027, 0, 0, 0], [0, 0.0034, 0, 0], [0, 0, 0.0027, 0], [0, 0, 0, 1.219]])
-    J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
 
     # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
     inertia_offset = np.array([4.0, 4.0, 4.0, 0.5, 0.5, 0.5])
@@ -166,7 +153,7 @@ class ur5e_arm():
         rospy.Subscriber('/enable_move',Bool,self.enable_callback)
 
         #start vel publisher
-        self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
+        self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",daq
                             Float64MultiArray,
                             queue_size=1)
 
@@ -569,10 +556,25 @@ class ur5e_arm():
         # impedance setting
         # zeta = 0.707
         zeta = 1.0
-        virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+        # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-        virtual_stiffness_tool = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
-        inertia_tool = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        virtual_stiffness = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        inertia = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+
+        vel = np.zeros(6)
+        pos = np.zeros(6)
+        vel_ref = np.zeros(6)
+        pos_ref = np.zeros(6)
+
+        vd = np.zeros(6)
+        ad = np.zeros(6)
+
+        joint_torque = np.zeros(6)
+        joint_vd = np.zeros(6)
+
+        wrench = np.zeros(6)
+        filtered_wrench = np.zeros(6)
+        wrench_global = np.zeros(6)
 
         end_effector_inertia = 0.45 * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
         est_wrench_global = np.zeros(6)
@@ -588,189 +590,138 @@ class ur5e_arm():
         ref_pos = deepcopy(self.current_joint_positions)
         rate = rospy.Rate(500)
 
-        # FK = np.zeros((4,4))
-        # RT = np.zeros((3,3))
-        wrench = np.zeros(6)
-        filtered_wrench = np.zeros(6)
-        wrench_global = np.zeros(6)
-        joint_desired_torque = np.zeros(6)
-        inertia = np.zeros(6)
-        acc = np.zeros(6)
-        vr = np.zeros(6)
-
         self.filter.calculate_initial_values(self.current_wrench)
 
+        # initialization
+        joint_daq_pos = self.current_daq_positions + self.daq_ref_pos
         Ja = self.kdl_kin.jacobian(self.current_joint_positions)
         FK = self.kdl_kin.forward(self.current_joint_positions)
         RT = FK[:3,:3]
+        Ja_ref = self.kdl_kin.jacobian(joint_daq_pos)
+        FK_ref = self.kdl_kin.forward(joint_daq_pos)
+        RT_ref = FK_ref[:3,:3]
         wrench = self.current_wrench
         filtered_wrench = np.array(self.filter.filter(wrench))
         np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
         np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-        np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+
         recent_data_focus_coeff = 0.99
         p = 1 / recent_data_focus_coeff
-        joint_torque_error = joint_desired_torque
         wrench_global_error = wrench_global
         est_wrench_global = wrench_global
         self.est_wrench_int_term = wrench_global / momentum_observer_gain
 
-        vd_tool = np.zeros(6)
-        vd = np.zeros(6)
-        vel_tool = np.zeros(6)
-        init_pos_tool = np.zeros(6)
-        pos_tool = np.zeros(6)
-        torque_joint = np.zeros(6)
-        init_pos_tool[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-        init_pos_tool[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-        init_pos_tool[5] = np.arctan2(RT[1,0]/np.cos(init_pos_tool[4]), RT[0,0]/np.cos(init_pos_tool[4])) # phi
-        init_pos_tool[3] = np.arctan2(RT[2,1]/np.cos(init_pos_tool[4]), RT[2,2]/np.cos(init_pos_tool[4])) # psi
+        init_pos_ref = np.zeros(6)
+        init_pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
+        init_pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
+        init_pos_ref[5] = np.arctan2(RT_ref[1,0]/np.cos(init_pos_ref[4]), RT_ref[0,0]/np.cos(init_pos_ref[4])) # phi
+        init_pos_ref[3] = np.arctan2(RT_ref[2,1]/np.cos(init_pos_ref[4]), RT_ref[2,2]/np.cos(init_pos_ref[4])) # psi
+
+        init_pos = np.zeros(6)
+        init_pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
+        init_pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
+        init_pos[5] = np.arctan2(RT[1,0]/np.cos(init_pos[4]), RT[0,0]/np.cos(init_pos[4])) # phi
+        init_pos[3] = np.arctan2(RT[2,1]/np.cos(init_pos[4]), RT[2,2]/np.cos(init_pos[4])) # psi
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
             self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
-            #get ref position inplace - avoids repeatedly declaring new array
-            # np.add(self.default_pos,self.current_daq_rel_positions,out = ref_pos)
-            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            #
+            # daq cartesian position
+            joint_daq_pos = self.current_daq_positions + self.daq_ref_pos
 
-            #enforce joint lims
-            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
-
-            #check that it is not hitting the table/floor
-            # if self.keepout_enabled:
-                # #run forward kinematcs
-                # pose = forward(ref_pos)
-                # test_point_pos = np.dot(pose, test_point).reshape(-1)
-                # if test_point_pos[2] < self.z_axis_lim:
-                #     #saturate pose
-                #     diff = pose[2,3] - test_point_pos[2]
-                #     pose[2,3] = self.z_axis_lim + diff
-                #     #get joint ref
-                #     new_ref = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
-                #     ref_pos = new_ref
-                # ref_pos = self.return_collison_free_config(ref_pos)
-
-            self.ref_pos.data = ref_pos
-            self.daq_pos_pub.publish(self.ref_pos)
-
-            #inplace error calculation
-            np.subtract(ref_pos, self.current_joint_positions, position_error)
-
-            #calculate vel signal
-            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
-            # vel_ref_array += self.joint_ff_gains_varaible*self.current_daq_velocities
-
-            # admittance control
             # jacobian
             Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             FK = self.kdl_kin.forward(self.current_joint_positions)
             RT = FK[:3,:3]
+            Ja_ref = self.kdl_kin.jacobian(joint_daq_pos)
+            FK_ref = self.kdl_kin.forward(joint_daq_pos)
+            RT_ref = FK_ref[:3,:3]
+
+            pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
+            pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
+            pos_ref[5] = np.arctan2(RT_ref[1,0]/np.cos(pos_ref[4]), RT_ref[0,0]/np.cos(pos_ref[4])) # phi
+            pos_ref[3] = np.arctan2(RT_ref[2,1]/np.cos(pos_ref[4]), RT_ref[2,2]/np.cos(pos_ref[4])) # psi
+
+            pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
+            pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
+            pos[5] = np.arctan2(RT[1,0]/np.cos(pos[4]), RT[0,0]/np.cos(pos[4])) # phi
+            pos[3] = np.arctan2(RT[2,1]/np.cos(pos[4]), RT[2,2]/np.cos(pos[4])) # psi
+
+            np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
+            np.matmul(Ja, self.current_joint_velocities, out = vel)
+            
+            # unwrap rotation position angle to go beyond -pi and pi
+            for i in range(3,6):
+                if pos[i] - init_pos[i] > np.pi:
+                    pos[i] = pos[i] - 2*np.pi
+                elif pos[i] - init_pos[i] < -np.pi:
+                    pos[i] = pos[i] + 2*np.pi
+
+                if pos_ref[i] - init_pos_ref[i] > np.pi:
+                    pos_ref[i] = pos_ref[i] - 2*np.pi
+                elif pos_ref[i] - init_pos_ref[i] < -np.pi:
+                    pos_ref[i] = pos_ref[i] + 2*np.pi
+
+            pos_error = pos - pos_ref
+            relative_pos_error = pos - init_pos - pos_ref + init_pos_ref
+            relative_pos_error[3] = -relative_pos_error[3]
+            relative_pos_error[4] = -relative_pos_error[4]
 
             wrench = self.current_wrench
             filtered_wrench = np.array(self.filter.filter(wrench))
             np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
             np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-            np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
-            self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
-            est_wrench_global = momentum_observer_gain * (1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
-            np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+            # np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
+            # self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
+            # est_wrench_global = momentum_observer_gain * (1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
+            # np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
 
             # online joint torque error id
-            if np.any(np.abs(position_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
-                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
+            # position_error = self.current_daq_positions + self.robot_ref_pos - self.current_joint_positions
+            if np.any(np.abs(relative_pos_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
+                # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = 1
             else:
-                joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
+                # joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
                 wrench_global_error = wrench_global_error + p / (1 + p) * (wrench_global - wrench_global_error)
                 p = (p - p ** 2 / (1 + p)) / recent_data_focus_coeff
-                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
+                # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = -1
 
-            # joint inertia
-            # T1tb = forward_link(np.array([self.current_joint_positions[0], self.DH_d[0], self.DH_a[0], self.DH_alpha[0]]))
-            # T2t1 = forward_link(np.array([self.current_joint_positions[1], self.DH_d[1], self.DH_a[1], self.DH_alpha[1]]))
-            # T3t2 = forward_link(np.array([self.current_joint_positions[2], self.DH_d[2], self.DH_a[2], self.DH_alpha[2]]))
-            # T4t3 = forward_link(np.array([self.current_joint_positions[3], self.DH_d[3], self.DH_a[3], self.DH_alpha[3]]))
-            # T5t4 = forward_link(np.array([self.current_joint_positions[4], self.DH_d[4], self.DH_a[4], self.DH_alpha[4]]))
-            # T6t5 = forward_link(np.array([self.current_joint_positions[5], self.DH_d[5], self.DH_a[5], self.DH_alpha[5]]))
-
-            # J6 = self.J6l
-            # J5 = self.J5l + np.matmul(np.matmul(T6t5,J6),T6t5.transpose())
-            # J4 = self.J4l + np.matmul(np.matmul(T5t4,J5),T5t4.transpose())
-            # J3 = self.J3l + np.matmul(np.matmul(T4t3,J4),T4t3.transpose())
-            # J2 = self.J2l + np.matmul(np.matmul(T3t2,J3),T3t2.transpose())
-            # J1 = self.J1l + np.matmul(np.matmul(T2t1,J2),T2t1.transpose())
-
-            # inertia[0] = J1[2,2]
-            # inertia[1] = J2[2,2]
-            # inertia[2] = J3[2,2]
-            # inertia[3] = J4[2,2]
-            # inertia[4] = J5[2,2]
-            # inertia[5] = J6[2,2]
-
-            acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (self.inertia_offset)) * self.current_joint_velocities) / (self.inertia_offset)
-            np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
-            vr += acc / sample_rate
+            # acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (self.inertia_offset)) * self.current_joint_velocities) / (self.inertia_offset)
+            # np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
+            # vr += acc / sample_rate
 
             # cartesian integration approach
-            Jar = self.kdl_kin.jacobian(ref_pos)
-            FKr = self.kdl_kin.forward(ref_pos)
-            RTr = FK[:3,:3]
-            init_pos_tool[:3] = np.array([FKr[0,3],FKr[1,3],FKr[2,3]])
-            init_pos_tool[4] = np.arctan2(-RTr[2,0], np.sqrt(RTr[0,0]**2 + RTr[1,0]**2)) # theta
-            init_pos_tool[5] = np.arctan2(RTr[1,0]/np.cos(init_pos_tool[4]), RTr[0,0]/np.cos(init_pos_tool[4])) # phi
-            init_pos_tool[3] = np.arctan2(RTr[2,1]/np.cos(init_pos_tool[4]), RTr[2,2]/np.cos(init_pos_tool[4])) # psi
-
-            pos_tool[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-            pos_tool[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-            pos_tool[5] = np.arctan2(RT[1,0]/np.cos(pos_tool[4]), RT[0,0]/np.cos(pos_tool[4])) # phi
-            pos_tool[3] = np.arctan2(RT[2,1]/np.cos(pos_tool[4]), RT[2,2]/np.cos(pos_tool[4])) # psi
-            # unwrap rotation position angle to go beyond -pi and pi
-            for i in range(3,6):
-                if pos_tool[i] - init_pos_tool[i] > np.pi:
-                    pos_tool[i] = pos_tool[i] - 2*np.pi
-                elif pos_tool[i] - init_pos_tool[i] < -np.pi:
-                    pos_tool[i] = pos_tool[i] + 2*np.pi
-
-            relative_pos_tool = pos_tool - init_pos_tool
-            relative_pos_tool[3] = -relative_pos_tool[3]
-            relative_pos_tool[4] = -relative_pos_tool[4]
-            np.matmul(Ja, self.current_joint_velocities, out = vel_tool)
-            ad_tool = (wg - virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool) / inertia_tool
-            vd_tool += ad_tool / sample_rate
+            # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
+            # vd += ad / sample_rate
             # turn on or turn off rotation
             # vd_tool[3:5] = np.array([0,0])
-            damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
+            # damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
             # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
-            u,s,vh = np.linalg.svd(Ja)
+            # u,s,vh = np.linalg.svd(Ja)
             # print(s)
-            np.matmul(damped_psedu_inv, vd_tool, out = vd)
-            np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
+            # np.matmul(damped_psedu_inv, vd_tool, out = vd)
+            # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
             # joint space inertia
-            # force_tool = wg - virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool
-            # np.matmul(Ja.transpose(), force_tool, out = torque_joint)
-            # ad_joint = torque_joint / self.inertia_offset
-            # vd += ad_joint / sample_rate
-            # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
-            # unable to control a separate axis
+            force = wg - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel
+            np.matmul(Ja.transpose(), force, out = joint_torque)
+            joint_ad = joint_torque / self.inertia_offset
+            np.clip(joint_ad,-self.max_joint_acc,self.max_joint_acc,joint_ad)
+            joint_vd += joint_ad / sample_rate
+            np.clip(joint_vd,-self.max_joint_speeds,self.max_joint_speeds,joint_vd)
 
-            # vel_ref_array += acc / sample_rate
-            vel_ref_array[2] += vr[2]
-            vel_ref_array[0] += vr[0]
-            vel_ref_array[1] += vr[1]
-            # vel_ref_array += vd
+            # vel_ref_array = vd
 
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
-            # self.test_data.data = vr
-            self.test_data.data = np.array([wrench_global[0],vel_tool[2],wrench_global[2],est_wrench_global[0],est_wrench_global[1],est_wrench_global[2]])
+            self.test_data.data = vd
             self.test_data_pub.publish(self.test_data)
 
             #publish
