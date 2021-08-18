@@ -117,7 +117,7 @@ class ur5e_arm():
     J6l = np.matrix([[0.00025, 0, 0, 0], [0, 0.00025, 0, 0], [0, 0, 0.00019, 0], [0, 0, 0, 0.1879]])
 
     # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
-    inertia_offset = np.array([3.0, 3.0, 3.0, 0.5, 0.5, 0.5])
+    inertia_offset = np.array([4.0, 4.0, 4.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
@@ -676,7 +676,7 @@ class ur5e_arm():
             np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
             self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
             est_wrench_global = momentum_observer_gain * (1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
-            np.matmul(Ja.transpose(), est_wrench_global, out = joint_desired_torque)
+            np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
 
             # online joint torque error id
             if np.any(np.abs(position_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
