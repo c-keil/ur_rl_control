@@ -104,7 +104,7 @@ class ur5e_arm():
     filter = PythonBPF(fs, fl, fh)
 
     # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
-    inertia_offset = np.array([4.0, 4.0, 4.0, 0.5, 0.5, 0.5])
+    inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
@@ -153,7 +153,7 @@ class ur5e_arm():
         rospy.Subscriber('/enable_move',Bool,self.enable_callback)
 
         #start vel publisher
-        self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",daq
+        self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
                             Float64MultiArray,
                             queue_size=1)
 
@@ -558,8 +558,8 @@ class ur5e_arm():
         zeta = 1.0
         # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-        virtual_stiffness = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
-        inertia = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        virtual_stiffness = 200.0 * np.array([1, 1, 1, 0.3, 0.3, 0.3])
+        inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
 
         vel = np.zeros(6)
         pos = np.zeros(6)
@@ -571,6 +571,7 @@ class ur5e_arm():
 
         joint_torque = np.zeros(6)
         joint_vd = np.zeros(6)
+        joint_pd = np.zeros(6)
 
         wrench = np.zeros(6)
         filtered_wrench = np.zeros(6)
@@ -593,7 +594,7 @@ class ur5e_arm():
         self.filter.calculate_initial_values(self.current_wrench)
 
         # initialization
-        joint_daq_pos = self.current_daq_positions + self.daq_ref_pos
+        joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
         Ja = self.kdl_kin.jacobian(self.current_joint_positions)
         FK = self.kdl_kin.forward(self.current_joint_positions)
         RT = FK[:3,:3]
@@ -629,7 +630,7 @@ class ur5e_arm():
         # print('safety_mode',self.safety_mode)
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             # daq cartesian position
-            joint_daq_pos = self.current_daq_positions + self.daq_ref_pos
+            joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
 
             # jacobian
             Ja = self.kdl_kin.jacobian(self.current_joint_positions)
@@ -651,6 +652,7 @@ class ur5e_arm():
 
             np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
             np.matmul(Ja, self.current_joint_velocities, out = vel)
+            vel_error = vel - vel_ref
             
             # unwrap rotation position angle to go beyond -pi and pi
             for i in range(3,6):
@@ -692,10 +694,6 @@ class ur5e_arm():
                 wg = wrench_global - wrench_global_error
                 flag = -1
 
-            # acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (self.inertia_offset)) * self.current_joint_velocities) / (self.inertia_offset)
-            # np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
-            # vr += acc / sample_rate
-
             # cartesian integration approach
             # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
             # vd += ad / sample_rate
@@ -709,19 +707,27 @@ class ur5e_arm():
             # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
             # joint space inertia
-            force = wg - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel
+            # force = - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel_error
+            force = wg - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel_error
             np.matmul(Ja.transpose(), force, out = joint_torque)
             joint_ad = joint_torque / self.inertia_offset
             np.clip(joint_ad,-self.max_joint_acc,self.max_joint_acc,joint_ad)
             joint_vd += joint_ad / sample_rate
             np.clip(joint_vd,-self.max_joint_speeds,self.max_joint_speeds,joint_vd)
+            # joint_pos = deepcopy(self.current_joint_positions)
+            # joint_pd = joint_pos + joint_vd / sample_rate
+            vel_lower_bound = (self.lower_lims - self.current_joint_positions) * sample_rate
+            np.clip(vel_lower_bound,-self.max_joint_speeds,0.0,vel_lower_bound)
+            vel_upper_bound = (self.upper_lims - self.current_joint_positions) * sample_rate
+            np.clip(vel_upper_bound,0.0,self.max_joint_speeds,vel_upper_bound)
+            np.clip(joint_vd,vel_lower_bound,vel_upper_bound,joint_vd)
 
-            # vel_ref_array = vd
+            vel_ref_array = joint_vd
 
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
-            self.test_data.data = vd
+            self.test_data.data = relative_pos_error
             self.test_data_pub.publish(self.test_data)
 
             #publish
