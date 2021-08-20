@@ -27,6 +27,7 @@ from pykdl_utils.kdl_kinematics import KDLKinematics
 r = rospkg.RosPack()
 path = r.get_path('ur_teleop_controller')
 robot = URDF.from_xml_file(path+"/config/ur5e.urdf")
+dummy_arm = URDF.from_xml_file(path+"/config/dummy_arm.urdf")
 
 # from controller_manager_msgs.srv import ListControllers
 # from controller_manager_msgs.srv import SwitchController
@@ -54,6 +55,7 @@ class ur5e_arm():
     safety_mode = -1
     shutdown = False
     enabled = False
+    jogging = False
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
 
@@ -103,7 +105,7 @@ class ur5e_arm():
     fs = sample_rate
     filter = PythonBPF(fs, fl, fh)
 
-    # inertia_offset = np.array([0.4, 0.4, 0.4, 0.1, 0.1, 0.1])
+    # inertia_offset = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
     inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
@@ -111,11 +113,15 @@ class ur5e_arm():
 
     tree = kdl_tree_from_urdf_model(robot)
     # print tree.getNrOfSegments()
-
     # forwawrd kinematics
     chain = tree.getChain("base_link", "wrist_3_link")
     # print chain.getNrOfJoints()
     kdl_kin = KDLKinematics(robot, "base_link", "wrist_3_link")
+
+    tree_op = kdl_tree_from_urdf_model(dummy_arm)
+    chain_op = tree_op.getChain("base_link", "wrist_3_link")
+    kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
+
 
     def __init__(self, test_control_signal = False, conservative_joint_lims = True):
         '''set up controller class variables & parameters'''
@@ -151,6 +157,8 @@ class ur5e_arm():
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
         #start subscriber for deadman enable
         rospy.Subscriber('/enable_move',Bool,self.enable_callback)
+        #start subscriber for jogging enable
+        rospy.Subscriber('/jogging',Bool,self.jogging_callback)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -235,6 +243,10 @@ class ur5e_arm():
     def enable_callback(self, data):
         '''Detects the software enable/disable safety switch'''
         self.enabled = data.data
+
+    def jogging_callback(self, data):
+        '''Detects the software jogging switch'''
+        self.jogging = data.data
 
     def user_wait_safety_stop(self):
         #wait for user to fix the stop
@@ -558,8 +570,9 @@ class ur5e_arm():
         zeta = 1.0
         # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-        virtual_stiffness = 200.0 * np.array([1, 1, 1, 0.3, 0.3, 0.3])
-        inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
+        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        # inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
+        coupling_damping = coupling_stiffness / 1
 
         vel = np.zeros(6)
         pos = np.zeros(6)
@@ -571,7 +584,6 @@ class ur5e_arm():
 
         joint_torque = np.zeros(6)
         joint_vd = np.zeros(6)
-        joint_pd = np.zeros(6)
 
         wrench = np.zeros(6)
         filtered_wrench = np.zeros(6)
@@ -584,11 +596,7 @@ class ur5e_arm():
 
         pin_damping = 0.05
 
-        position_error = np.zeros(6)
-        absolute_position_error = np.zeros(6)
-        position_error_exceeded_by = np.zeros(6)
         vel_ref_array = np.zeros(6)
-        ref_pos = deepcopy(self.current_joint_positions)
         rate = rospy.Rate(500)
 
         self.filter.calculate_initial_values(self.current_wrench)
@@ -598,8 +606,8 @@ class ur5e_arm():
         Ja = self.kdl_kin.jacobian(self.current_joint_positions)
         FK = self.kdl_kin.forward(self.current_joint_positions)
         RT = FK[:3,:3]
-        Ja_ref = self.kdl_kin.jacobian(joint_daq_pos)
-        FK_ref = self.kdl_kin.forward(joint_daq_pos)
+        Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
+        FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
         RT_ref = FK_ref[:3,:3]
         wrench = self.current_wrench
         filtered_wrench = np.array(self.filter.filter(wrench))
@@ -628,7 +636,7 @@ class ur5e_arm():
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
             self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
-        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
+        while not self.shutdown and self.safety_mode == 1 and self.enabled and not self.jogging: #chutdown is set on ctrl-c.
             # daq cartesian position
             joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
 
@@ -636,8 +644,8 @@ class ur5e_arm():
             Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             FK = self.kdl_kin.forward(self.current_joint_positions)
             RT = FK[:3,:3]
-            Ja_ref = self.kdl_kin.jacobian(joint_daq_pos)
-            FK_ref = self.kdl_kin.forward(joint_daq_pos)
+            Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
+            FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
             RT_ref = FK_ref[:3,:3]
 
             pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
@@ -707,8 +715,8 @@ class ur5e_arm():
             # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
             # joint space inertia
-            # force = - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel_error
-            force = wg - virtual_stiffness * relative_pos_error - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel_error
+            # force = - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
+            force = wg - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
             np.matmul(Ja.transpose(), force, out = joint_torque)
             joint_ad = joint_torque / self.inertia_offset
             np.clip(joint_ad,-self.max_joint_acc,self.max_joint_acc,joint_ad)
@@ -753,6 +761,11 @@ class ur5e_arm():
             #check enabled
             if not self.enabled:
                 time.sleep(0.01)
+                continue
+            #slow catching dummy arm
+            if self.jogging:
+                current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
+                arm.move_to_robost(current_homing_pos,speed = 0.1,override_initial_joint_lims=True,require_enable = True)
                 continue
             #start moving
             print('Starting Free Movement')
