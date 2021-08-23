@@ -165,6 +165,10 @@ class ur5e_arm():
                             Float64MultiArray,
                             queue_size=1)
 
+        #vertical direction force measurement publisher
+        self.load_mass_pub = rospy.Publisher("/load_mass",
+                            Float64MultiArray,
+                            queue_size=1)
         self.test_data_pub = rospy.Publisher("/test_data",
                             Float64MultiArray,
                             queue_size=1)
@@ -188,6 +192,7 @@ class ur5e_arm():
 
         self.velocity = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.vel_ref = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.load_mass = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.test_data = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 
@@ -572,7 +577,7 @@ class ur5e_arm():
 
         coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
         # inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
-        coupling_damping = coupling_stiffness / 1
+        coupling_damping = coupling_stiffness * 1.4
 
         vel = np.zeros(6)
         pos = np.zeros(6)
@@ -597,6 +602,7 @@ class ur5e_arm():
         pin_damping = 0.05
 
         vel_ref_array = np.zeros(6)
+        load_mass_array = np.zeros(6)
         rate = rospy.Rate(500)
 
         self.filter.calculate_initial_values(self.current_wrench)
@@ -690,7 +696,7 @@ class ur5e_arm():
 
             # online joint torque error id
             # position_error = self.current_daq_positions + self.robot_ref_pos - self.current_joint_positions
-            if np.any(np.abs(relative_pos_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
+            if np.any(np.abs(relative_pos_error)>0.02) or np.any(np.abs(self.current_joint_velocities)>0.02):
                 # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = 1
@@ -701,6 +707,10 @@ class ur5e_arm():
                 # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = -1
+
+            load_mass_array = wg / 10
+            self.load_mass.data = load_mass_array
+            self.load_mass_pub.publish(self.load_mass)
 
             # cartesian integration approach
             # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
