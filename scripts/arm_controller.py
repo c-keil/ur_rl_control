@@ -626,6 +626,9 @@ class ur5e_arm():
         est_wrench_global = wrench_global
         self.est_wrench_int_term = wrench_global / momentum_observer_gain
 
+        q = 1 / recent_data_focus_coeff
+        wrench_global_error_display = wrench_global
+
         init_pos_ref = np.zeros(6)
         init_pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
         init_pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
@@ -696,7 +699,7 @@ class ur5e_arm():
 
             # online joint torque error id
             # position_error = self.current_daq_positions + self.robot_ref_pos - self.current_joint_positions
-            if np.any(np.abs(relative_pos_error)>0.02) or np.any(np.abs(self.current_joint_velocities)>0.02):
+            if np.any(np.abs(relative_pos_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
                 # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = 1
@@ -708,7 +711,14 @@ class ur5e_arm():
                 wg = wrench_global - wrench_global_error
                 flag = -1
 
-            load_mass_array = wg / 10
+            if np.any(np.abs(relative_pos_error)>0.02) or np.any(np.abs(self.current_joint_velocities)>0.02):
+                wgd = wrench_global - wrench_global_error_display
+            else:
+                wrench_global_error_display = wrench_global_error_display + q / (1 + q) * (wrench_global - wrench_global_error_display)
+                q = (q - q ** 2 / (1 + q)) / recent_data_focus_coeff
+                wgd = wrench_global - wrench_global_error_display
+
+            load_mass_array = wgd / 10
             self.load_mass.data = load_mass_array
             self.load_mass_pub.publish(self.load_mass)
 
