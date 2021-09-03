@@ -105,8 +105,8 @@ class ur5e_arm():
     fs = sample_rate
     filter = PythonBPF(fs, fl, fh)
 
-    # inertia_offset = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
-    inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
+    inertia_offset = np.array([5.0, 5.0, 5.0, 2.0, 2.0, 2.0])
+    # inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
@@ -575,7 +575,7 @@ class ur5e_arm():
         zeta = 1.0
         # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.4, 0.4, 0.4])
         # inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
         coupling_damping = coupling_stiffness * 1.4
 
@@ -583,6 +583,8 @@ class ur5e_arm():
         pos = np.zeros(6)
         vel_ref = np.zeros(6)
         pos_ref = np.zeros(6)
+
+        force = np.zeros(6)
 
         vd = np.zeros(6)
         ad = np.zeros(6)
@@ -631,15 +633,17 @@ class ur5e_arm():
 
         init_pos_ref = np.zeros(6)
         init_pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
-        init_pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
-        init_pos_ref[5] = np.arctan2(RT_ref[1,0]/np.cos(init_pos_ref[4]), RT_ref[0,0]/np.cos(init_pos_ref[4])) # phi
-        init_pos_ref[3] = np.arctan2(RT_ref[2,1]/np.cos(init_pos_ref[4]), RT_ref[2,2]/np.cos(init_pos_ref[4])) # psi
+        init_pos_ref[4] = np.arcsin(-RT_ref[2,0]) # theta
+        last_theta_ref = init_pos_ref[4]
+        init_pos_ref[5] = np.arctan2(RT_ref[1,0], RT_ref[0,0]) # phi
+        init_pos_ref[3] = np.arctan2(RT_ref[2,1], RT_ref[2,2]) # psi
 
         init_pos = np.zeros(6)
         init_pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-        init_pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-        init_pos[5] = np.arctan2(RT[1,0]/np.cos(init_pos[4]), RT[0,0]/np.cos(init_pos[4])) # phi
-        init_pos[3] = np.arctan2(RT[2,1]/np.cos(init_pos[4]), RT[2,2]/np.cos(init_pos[4])) # psi
+        init_pos[4] = np.arcsin(-RT[2,0]) # theta
+        last_theta = init_pos[4]
+        init_pos[5] = np.arctan2(RT[1,0], RT[0,0]) # phi
+        init_pos[3] = np.arctan2(RT[2,1], RT[2,2]) # psi
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
@@ -658,14 +662,28 @@ class ur5e_arm():
             RT_ref = FK_ref[:3,:3]
 
             pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
-            pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
-            pos_ref[5] = np.arctan2(RT_ref[1,0]/np.cos(pos_ref[4]), RT_ref[0,0]/np.cos(pos_ref[4])) # phi
-            pos_ref[3] = np.arctan2(RT_ref[2,1]/np.cos(pos_ref[4]), RT_ref[2,2]/np.cos(pos_ref[4])) # psi
+            # pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
+            pos_ref[4] = np.arcsin(-RT_ref[2,0])
+            if pos_ref[4] - last_theta_ref > np.pi/2:
+                pos_ref[4] = pos_ref[4] - np.pi
+            elif pos_ref[4] - last_theta_ref < -np.pi/2:
+                pos_ref[4] = pos_ref[4] + np.pi
+            las_theta_ref = pos_ref[4]
+            cos_theta_ref_sign = np.sign(np.cos(pos_ref[4]))
+            pos_ref[5] = np.arctan2(RT_ref[1,0]*cos_theta_ref_sign, RT_ref[0,0]*cos_theta_ref_sign) # phi
+            pos_ref[3] = np.arctan2(RT_ref[2,1]*cos_theta_ref_sign, RT_ref[2,2]*cos_theta_ref_sign) # psi
 
             pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-            pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-            pos[5] = np.arctan2(RT[1,0]/np.cos(pos[4]), RT[0,0]/np.cos(pos[4])) # phi
-            pos[3] = np.arctan2(RT[2,1]/np.cos(pos[4]), RT[2,2]/np.cos(pos[4])) # psi
+            # pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
+            pos[4] = np.arcsin(-RT[2,0])
+            if pos[4] - last_theta > np.pi/2:
+                pos[4] = pos[4] - np.pi
+            elif pos[4] - last_theta < -np.pi/2:
+                pos[4] = pos[4] + np.pi
+            last_theta = pos[4]
+            cos_theta_sign = np.sign(np.cos(pos[4]))
+            pos[5] = np.arctan2(RT[1,0]*cos_theta_sign, RT[0,0]*cos_theta_sign) # phi
+            pos[3] = np.arctan2(RT[2,1]*cos_theta_sign, RT[2,2]*cos_theta_sign) # psi
 
             np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
             np.matmul(Ja, self.current_joint_velocities, out = vel)
@@ -735,8 +753,9 @@ class ur5e_arm():
             # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
             # joint space inertia
-            # force = - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
             force = wg - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
+            # force[:3] = wg[:3] - coupling_stiffness[:3] * relative_pos_error[:3] - coupling_damping[:3] * vel_error[:3]
+            # force[3:] = - coupling_stiffness[3:] * relative_pos_error[3:] - coupling_damping[3:] * vel_error[3:]
             np.matmul(Ja.transpose(), force, out = joint_torque)
             joint_ad = joint_torque / self.inertia_offset
             np.clip(joint_ad,-self.max_joint_acc,self.max_joint_acc,joint_ad)
@@ -755,7 +774,7 @@ class ur5e_arm():
             #enforce max velocity setting
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
-            self.test_data.data = relative_pos_error
+            self.test_data.data = vel_error
             self.test_data_pub.publish(self.test_data)
 
             #publish
