@@ -647,49 +647,57 @@ class ur5e_arm():
         init_pos[5] = np.arctan2(RT[1,0], RT[0,0]) # phi
         init_pos[3] = np.arctan2(RT[2,1], RT[2,2]) # psi
 
+        # go back to joint control
+        ref_pos = deepcopy(self.current_joint_positions)
+        position_error = np.zeros(6)
+
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
             self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
-        while not self.shutdown and self.safety_mode == 1 and self.enabled and not self.jogging: #chutdown is set on ctrl-c.
+        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             # daq cartesian position
-            joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
+            # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
+            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
+            np.subtract(ref_pos, self.current_joint_positions, position_error)
+            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
 
             # jacobian
             Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             FK = self.kdl_kin.forward(self.current_joint_positions)
             RT = FK[:3,:3]
-            Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
-            FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
-            RT_ref = FK_ref[:3,:3]
+            # Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
+            # FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
+            # RT_ref = FK_ref[:3,:3]
 
-            pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
+            # pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
             # pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
-            pos_ref[4] = np.arcsin(-RT_ref[2,0])
-            if pos_ref[4] - last_theta_ref > np.pi/2:
-                pos_ref[4] = pos_ref[4] - np.pi
-            elif pos_ref[4] - last_theta_ref < -np.pi/2:
-                pos_ref[4] = pos_ref[4] + np.pi
-            las_theta_ref = pos_ref[4]
-            cos_theta_ref_sign = np.sign(np.cos(pos_ref[4]))
-            pos_ref[5] = np.arctan2(RT_ref[1,0]*cos_theta_ref_sign, RT_ref[0,0]*cos_theta_ref_sign) # phi
-            pos_ref[3] = np.arctan2(RT_ref[2,1]*cos_theta_ref_sign, RT_ref[2,2]*cos_theta_ref_sign) # psi
+            # pos_ref[4] = np.arcsin(-RT_ref[2,0])
+            # if pos_ref[4] - last_theta_ref > np.pi/2:
+            #     pos_ref[4] = pos_ref[4] - np.pi
+            # elif pos_ref[4] - last_theta_ref < -np.pi/2:
+            #     pos_ref[4] = pos_ref[4] + np.pi
+            # las_theta_ref = pos_ref[4]
+            # cos_theta_ref_sign = np.sign(np.cos(pos_ref[4]))
+            # pos_ref[5] = np.arctan2(RT_ref[1,0]*cos_theta_ref_sign, RT_ref[0,0]*cos_theta_ref_sign) # phi
+            # pos_ref[3] = np.arctan2(RT_ref[2,1]*cos_theta_ref_sign, RT_ref[2,2]*cos_theta_ref_sign) # psi
 
-            pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
+            # pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
             # pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-            pos[4] = np.arcsin(-RT[2,0])
-            if pos[4] - last_theta > np.pi/2:
-                pos[4] = pos[4] - np.pi
-            elif pos[4] - last_theta < -np.pi/2:
-                pos[4] = pos[4] + np.pi
-            last_theta = pos[4]
-            cos_theta_sign = np.sign(np.cos(pos[4]))
-            pos[5] = np.arctan2(RT[1,0]*cos_theta_sign, RT[0,0]*cos_theta_sign) # phi
-            pos[3] = np.arctan2(RT[2,1]*cos_theta_sign, RT[2,2]*cos_theta_sign) # psi
+            # pos[4] = np.arcsin(-RT[2,0])
+            # if pos[4] - last_theta > np.pi/2:
+            #    pos[4] = pos[4] - np.pi
+            # elif pos[4] - last_theta < -np.pi/2:
+            #    pos[4] = pos[4] + np.pi
+            # last_theta = pos[4]
+            # cos_theta_sign = np.sign(np.cos(pos[4]))
+            # pos[5] = np.arctan2(RT[1,0]*cos_theta_sign, RT[0,0]*cos_theta_sign) # phi
+            # pos[3] = np.arctan2(RT[2,1]*cos_theta_sign, RT[2,2]*cos_theta_sign) # psi
 
-            np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
-            np.matmul(Ja, self.current_joint_velocities, out = vel)
-            vel_error = vel - vel_ref
+            # np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
+            # np.matmul(Ja, self.current_joint_velocities, out = vel)
+            # vel_error = vel - vel_ref
             
             # unwrap rotation position angle to go beyond -pi and pi
             for i in range(3,6):
@@ -808,15 +816,12 @@ class ur5e_arm():
             if not self.enabled:
                 time.sleep(0.01)
                 continue
-            #slow catching dummy arm
-            if self.jogging:
-                current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
-                if not self.identify_joint_lim(current_homing_pos):
-                    print('Homing desired position outside robot position limit. Please change dummy position')
-                    continue
-                else:
-                    self.move_to_robost(current_homing_pos,speed = 0.3,override_initial_joint_lims=True,require_enable = True)
+            current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
+            if not self.identify_joint_lim(current_homing_pos):
+                print('Homing desired position outside robot position limit. Please change dummy position')
                 continue
+            else:
+                self.move_to_robost(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
             #start moving
             print('Starting Free Movement')
             self.move(capture_start_as_ref_pos = True,
