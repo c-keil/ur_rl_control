@@ -68,13 +68,13 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -90, 180.0])
+    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -45.0, 180.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
 
-    lower_lims = (np.pi/180)*np.array([0.0, -120.0, 0.0, -180.0, -180.0, 90.0])
-    upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
+    lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
+    upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
@@ -105,11 +105,13 @@ class ur5e_arm():
     fs = sample_rate
     filter = PythonBPF(fs, fl, fh)
 
-    inertia_offset = np.array([5.0, 5.0, 5.0, 2.0, 2.0, 2.0])
+    inertia_offset = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
     # inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
 
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
+    load_mass_publish_rate = 1
+    load_mass_publish_index = 0
 
     tree = kdl_tree_from_urdf_model(robot)
     # print tree.getNrOfSegments()
@@ -575,7 +577,7 @@ class ur5e_arm():
         zeta = 1.0
         # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.4, 0.4, 0.4])
+        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.2, 0.2, 0.2])
         # inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
         coupling_damping = coupling_stiffness * 1.4
 
@@ -737,8 +739,13 @@ class ur5e_arm():
                 wgd = wrench_global - wrench_global_error_display
 
             load_mass_array = wgd / 10
+            np.clip(load_mass_array,-100.0,0.0,load_mass_array)
             self.load_mass.data = load_mass_array
-            self.load_mass_pub.publish(self.load_mass)
+            if self.load_mass_publish_index < sample_rate / self.load_mass_publish_rate:
+                self.load_mass_publish_index = self.load_mass_publish_index + 1
+            else:
+                self.load_mass_publish_index = 0
+                self.load_mass_pub.publish(self.load_mass)
 
             # cartesian integration approach
             # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
@@ -804,7 +811,11 @@ class ur5e_arm():
             #slow catching dummy arm
             if self.jogging:
                 current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
-                arm.move_to_robost(current_homing_pos,speed = 0.1,override_initial_joint_lims=True,require_enable = True)
+                if not self.identify_joint_lim(current_homing_pos):
+                    print('Homing desired position outside robot position limit. Please change dummy position')
+                    continue
+                else:
+                    self.move_to_robost(current_homing_pos,speed = 0.3,override_initial_joint_lims=True,require_enable = True)
                 continue
             #start moving
             print('Starting Free Movement')
