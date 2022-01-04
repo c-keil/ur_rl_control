@@ -54,8 +54,10 @@ class ur5e_admittance():
     upper_lims = (np.pi/180)*np.array([180.0, 0.0, 175.0, 0.0, 0.0, 270.0])
     conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-    max_joint_speeds = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_tool_speeds = 0.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_tool_acc = 0.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
     fl = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     fh = [20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
@@ -383,7 +385,7 @@ class ur5e_admittance():
         virtual_stiffness = 50.0 * np.array([0.5, 1.0, 1.0, 1.0, 1.0, 1.0])
 
         virtual_stiffness_tool = 100.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
-        inertia_tool = 30.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
+        inertia_tool = 20.0 * np.array([1, 1, 1, 0.1, 0.1, 0.1])
 
         pin_damping = 0.05
 
@@ -517,7 +519,9 @@ class ur5e_admittance():
             # tool space inertia
             # ad_tool = (wg - virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool) / inertia_tool
             ad_tool = (- virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool) / inertia_tool
+            np.clip(ad_tool,-self.max_tool_acc,self.max_tool_acc,ad_tool)
             vd_tool += ad_tool / sample_rate
+            np.clip(vd_tool,-self.max_tool_speeds,self.max_tool_speeds,vd_tool)
             # turn on or turn off rotation
             # vd_tool[3:5] = np.array([0,0])
             # use damped psedu inv to replace direct inverse
@@ -538,7 +542,7 @@ class ur5e_admittance():
 
             np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
-            self.test_data.data = relative_pos_tool
+            self.test_data.data = vel_tool
             # self.test_data.data = np.array([jadet,0,0,0,0,0])
             self.test_data_pub.publish(self.test_data)
 
