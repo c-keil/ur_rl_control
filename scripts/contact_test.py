@@ -56,7 +56,7 @@ class ur5e_admittance():
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    max_tool_speeds = 0.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_tool_speeds = 0.16 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_tool_acc = 0.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
     fl = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -430,7 +430,8 @@ class ur5e_admittance():
         vd = np.zeros(6)
         vel_tool = np.zeros(6)
         init_pos_tool = np.zeros(6)
-        ini_pos_tool_off = [[-0.3, 0, -0.6, 0, -np.pi/4, 0],[0.3, 0, -0.6, 0, -np.pi/4, 0]]
+        ini_pos_tool_off = [[-0.3, 0, -0.58, 0, np.pi/4, 0],[0.3, 0, -0.58, 0, np.pi/4, 0]]
+        # ini_pos_tool_off = [[-0.3, 0, -0.6, 0, 0, 0],[0.3, 0, -0.6, 0, 0, 0]]
         pos_index = 0
         pos_tool = np.zeros(6)
         torque_joint = np.zeros(6)
@@ -438,6 +439,13 @@ class ur5e_admittance():
         init_pos_tool[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
         init_pos_tool[5] = np.arctan2(RT[1,0]/np.cos(init_pos_tool[4]), RT[0,0]/np.cos(init_pos_tool[4])) # phi
         init_pos_tool[3] = np.arctan2(RT[2,1]/np.cos(init_pos_tool[4]), RT[2,2]/np.cos(init_pos_tool[4])) # psi
+
+        init_pos_tool[3] = -init_pos_tool[3]
+        init_pos_tool[4] = -init_pos_tool[4]
+
+        planned_pos = np.zeros(6)
+        planned_vel = np.zeros(6)
+        planned_pos = init_pos_tool
 
         while not self.shutdown and self.safety_mode == 1: #chutdown is set on ctrl-c.
 
@@ -490,6 +498,9 @@ class ur5e_admittance():
             pos_tool[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
             pos_tool[5] = np.arctan2(RT[1,0]/np.cos(pos_tool[4]), RT[0,0]/np.cos(pos_tool[4])) # phi
             pos_tool[3] = np.arctan2(RT[2,1]/np.cos(pos_tool[4]), RT[2,2]/np.cos(pos_tool[4])) # psi
+
+            pos_tool[3] = -pos_tool[3]
+            pos_tool[4] = -pos_tool[4]
             # unwrap rotation position angle to go beyond -pi and pi
             for i in range(3,6):
                 if pos_tool[i] - init_pos_tool[i] > np.pi:
@@ -504,17 +515,25 @@ class ur5e_admittance():
 
             # two-points move
             relative_pos_tool = pos_tool - init_pos_tool - ini_pos_tool_off[pos_index]
+            # relative_pos_tool = planned_pos - init_pos_tool - ini_pos_tool_off[pos_index]
+            if np.all(np.abs(self.current_joint_velocities)<0.001):
+                planned_pos = pos_tool
             if np.all(np.abs(relative_pos_tool)<0.0001) and np.all(np.abs(self.current_joint_velocities)<0.001):
+                print('change reference')
                 pos_index = (pos_index + 1) % 2
 
             # set zero point
             # relative_pos_tool = pos_tool - init_pos_tool
-            relative_pos_tool[3] = -relative_pos_tool[3]
-            relative_pos_tool[4] = -relative_pos_tool[4]
+            # relative_pos_tool[3] = -relative_pos_tool[3]
+            # relative_pos_tool[4] = -relative_pos_tool[4]
             # print(pos_tool)
             # print(self.contact_flag)
             np.matmul(Ja, self.current_joint_velocities, out = vel_tool)
             # wrench global needs zero
+
+            pre_planned_velocity = planned_vel
+            pre_planned_position = planned_pos
+            planned_pos, planned_vel = self.trajectory_planner(init_pos_tool + ini_pos_tool_off[pos_index],self.max_tool_speeds,self.max_tool_acc,pre_planned_position,pre_planned_velocity)
 
             # tool space inertia
             # ad_tool = (wg - virtual_stiffness_tool * relative_pos_tool - 2 * zeta * np.sqrt(virtual_stiffness_tool * inertia_tool) * vel_tool) / inertia_tool
@@ -527,7 +546,7 @@ class ur5e_admittance():
             # use damped psedu inv to replace direct inverse
             damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
             # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
-            np.matmul(damped_psedu_inv, vd_tool, out = vd)
+            np.matmul(damped_psedu_inv, planned_vel, out = vd)
             # u,s,vh = np.linalg.svd(Ja)
             # print(vd)
 
@@ -542,8 +561,7 @@ class ur5e_admittance():
 
             np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
-            self.test_data.data = vel_tool
-            # self.test_data.data = np.array([jadet,0,0,0,0,0])
+            self.test_data.data = np.reshape(np.array([planned_vel[0:3],vel_tool[0:3]]),6)
             self.test_data_pub.publish(self.test_data)
 
             vel_ref_array = vd
@@ -573,6 +591,25 @@ class ur5e_admittance():
             print('Starting Free Movement')
             self.move(capture_start_as_ref_pos = True,
                       dialoge_enabled = False)
+
+    def trajectory_planner(self,target_position,max_velocity,max_acc,current_position,pre_planned_velocity):
+        '''Plan a trajectory between initial position and target position consider max velocity and max acceleration'''
+        pos_error = target_position - current_position
+        stop_step_size = max_velocity / max_acc * sample_rate
+        max_stop_distance = stop_step_size * (stop_step_size + 1) / 2 * max_acc / (sample_rate**2)
+        planned_vel = (-1.0*max_acc/sample_rate + np.sqrt((max_acc/sample_rate)**2+np.absolute(8*max_acc*pos_error)))/2*np.sign(pos_error)
+        for i in range(len(planned_vel)):
+            if pos_error[i] >= max_stop_distance[i]:
+                planned_vel[i] = max_velocity[i]
+            elif pos_error[i] <= -1.0*max_stop_distance[i]:
+                planned_vel[i] = -1.0*max_velocity[i]
+        # planned_vel = (target_position - current_position) * sample_rate
+        # np.clip(planned_vel,-max_velocity,max_velocity,planned_vel)
+        planned_acc = (planned_vel - pre_planned_velocity) * sample_rate
+        np.clip(planned_acc,-max_acc,max_acc,planned_acc)
+        planned_vel = planned_acc / sample_rate + pre_planned_velocity
+        planned_pos = planned_vel / sample_rate + current_position
+        return planned_pos, planned_vel
 
 if __name__ == "__main__":
     #This script is included for testing purposes
