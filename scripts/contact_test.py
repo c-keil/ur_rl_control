@@ -56,8 +56,8 @@ class ur5e_admittance():
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    max_tool_speeds = 0.16 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    max_tool_acc = 0.5 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_tool_speeds = 0.3 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    max_tool_acc = 1.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
     fl = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     fh = [20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
@@ -430,8 +430,8 @@ class ur5e_admittance():
         vd = np.zeros(6)
         vel_tool = np.zeros(6)
         init_pos_tool = np.zeros(6)
-        ini_pos_tool_off = [[-0.3, 0, -0.58, 0, np.pi/4, 0],[0.3, 0, -0.58, 0, np.pi/4, 0]]
-        # ini_pos_tool_off = [[-0.3, 0, -0.6, 0, 0, 0],[0.3, 0, -0.6, 0, 0, 0]]
+        # ini_pos_tool_off = [[-0.3, 0, -0.58, 0, np.pi/4, 0],[0.3, 0, -0.58, 0, np.pi/4, 0]]
+        ini_pos_tool_off = [[-0.3, 0, -0.64, 0, np.pi/4, 0],[0.3, 0, -0.64, 0, np.pi/4, 0]]
         pos_index = 0
         pos_tool = np.zeros(6)
         torque_joint = np.zeros(6)
@@ -443,7 +443,6 @@ class ur5e_admittance():
         init_pos_tool[3] = -init_pos_tool[3]
         init_pos_tool[4] = -init_pos_tool[4]
 
-        planned_pos = np.zeros(6)
         planned_vel = np.zeros(6)
         planned_pos = init_pos_tool
 
@@ -515,9 +514,16 @@ class ur5e_admittance():
 
             # two-points move
             relative_pos_tool = pos_tool - init_pos_tool - ini_pos_tool_off[pos_index]
+
             # relative_pos_tool = planned_pos - init_pos_tool - ini_pos_tool_off[pos_index]
-            if np.all(np.abs(self.current_joint_velocities)<0.001):
+            checkpoint = planned_pos - init_pos_tool - ini_pos_tool_off[pos_index]
+            for mid_point in range(1,12):
+                if np.abs(checkpoint[0] + mid_point/12.0*2.0*ini_pos_tool_off[pos_index][0])<0.001:
+                    planned_pos = pos_tool
+                    print(mid_point)
+            if np.all(np.abs(checkpoint)<0.0001) and np.all(np.abs(self.current_joint_velocities)<0.001):
                 planned_pos = pos_tool
+                print('update planned tool position')
             if np.all(np.abs(relative_pos_tool)<0.0001) and np.all(np.abs(self.current_joint_velocities)<0.001):
                 print('change reference')
                 pos_index = (pos_index + 1) % 2
