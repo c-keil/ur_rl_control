@@ -712,7 +712,9 @@ class ur5e_arm():
                 wg = wrench_global - wrench_global_error
                 flag = -1
             
-            acc = (joint_desired_torque + virtual_stiffness * position_error - 2 * zeta * np.sqrt(virtual_stiffness * (self.inertia_offset)) * self.current_joint_velocities) / (self.inertia_offset)
+            acc = (joint_desired_torque + virtual_stiffness * position_error 
+                    + 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * (self.current_daq_velocities - self.current_joint_velocities) 
+                    - 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * self.current_joint_velocities) / (self.inertia_offset)
             np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
             vr += acc / sample_rate
 
