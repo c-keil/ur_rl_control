@@ -401,8 +401,8 @@ class ur5e_arm():
                     break
                 loop_rate.sleep()
 
-        # while np.any(np.abs(self.current_joint_velocities)>0.0001):
-        self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+        while np.any(np.abs(self.current_joint_velocities)>0.0001):
+            self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
     def in_joint_lims(self, position):
         '''expects an array of joint positions'''
