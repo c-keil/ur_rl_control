@@ -401,8 +401,8 @@ class ur5e_arm():
                     break
                 loop_rate.sleep()
 
-        while np.any(np.abs(self.current_joint_velocities)>0.0001):
-            self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+        # while np.any(np.abs(self.current_joint_velocities)>0.0001):
+        self.vel_pub.publish(Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
 
     def in_joint_lims(self, position):
         '''expects an array of joint positions'''
@@ -877,16 +877,17 @@ class ur5e_arm():
             if not self.identify_joint_lim(current_homing_pos):
                 print('Homing desired position outside robot position limit. Please change dummy position')
                 continue
-            else:
-                self.is_homing = True
-                self.is_homing_pub.publish(self.is_homing)
-                self.move_to_robost(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
-                self.is_homing = False
-                self.is_homing_pub.publish(self.is_homing)
-            #start moving
-            print('Starting Free Movement')
-            self.move(capture_start_as_ref_pos = True,
-                      dialoge_enabled = False)
+            
+            self.is_homing = True
+            self.is_homing_pub.publish(self.is_homing)
+            reached_goal = self.move_to(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
+            self.is_homing = False
+            self.is_homing_pub.publish(self.is_homing)
+            if reached_goal:
+                #start moving
+                print('Starting Free Movement')
+                self.move(capture_start_as_ref_pos = True,
+                          dialoge_enabled = False)
 
 
 
