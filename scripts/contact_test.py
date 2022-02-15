@@ -431,7 +431,7 @@ class ur5e_admittance():
         vel_tool = np.zeros(6)
         init_pos_tool = np.zeros(6)
         # ini_pos_tool_off = [[-0.3, 0, -0.58, 0, np.pi/4, 0],[0.3, 0, -0.58, 0, np.pi/4, 0]]
-        ini_pos_tool_off = [[-0.3, 0, -0.64, 0, np.pi/4, 0],[0.3, 0, -0.64, 0, np.pi/4, 0]]
+        ini_pos_tool_off = [[-0.3, 0, -0.62, 0, np.pi/4, 0],[0.3, 0, -0.62, 0, np.pi/4, 0]]
         pos_index = 0
         pos_tool = np.zeros(6)
         torque_joint = np.zeros(6)
