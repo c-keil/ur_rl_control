@@ -82,6 +82,7 @@ class ur5e_arm():
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    homing_joint_speeds = 0.1 * np.array([1.0]*6)
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
@@ -100,6 +101,7 @@ class ur5e_arm():
     current_daq_rel_positions_waraped = np.zeros(6)
 
     first_daq_callback = True
+    first_wrench_callback = True
 
     # define bandpass filter parameters
     fl = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -107,13 +109,24 @@ class ur5e_arm():
     fs = sample_rate
     filter = PythonBPF(fs, fl, fh)
 
-    inertia_offset = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
-    # inertia_offset = np.array([5.0, 5.0, 5.0, 0.5, 0.5, 0.5])
-
     wrench = np.zeros(6)
     est_wrench_int_term = np.zeros(6)
     load_mass_publish_rate = 1
     load_mass_publish_index = 0
+
+    ## control loop extra parameters
+    current_wrench_global = np.zeros(6)
+    current_joint_torque = np.zeros(6)
+
+    joint_torque_error = np.zeros(6)
+    wrench_global_error = np.zeros(6)
+
+    joint_inertia = np.array([5.0, 5.0, 5.0, 1.0, 1.0, 1.0])
+    joint_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+    zeta = 1.0
+
+    recent_data_focus_coeff = 0.99
+    p = 1 / recent_data_focus_coeff
 
     tree = kdl_tree_from_urdf_model(robot)
     # print tree.getNrOfSegments()
@@ -218,6 +231,18 @@ class ur5e_arm():
 
     def wrench_callback(self, data):
         self.current_wrench = np.array([data.wrench.force.x, data.wrench.force.y, data.wrench.force.z, data.wrench.torque.x, data.wrench.torque.y, data.wrench.torque.z])
+        
+        if self.first_wrench_callback:
+            self.filter.calculate_initial_values(self.current_wrench)
+        
+        Ja = self.kdl_kin.jacobian(self.current_joint_positions)
+        FK = self.kdl_kin.forward(self.current_joint_positions)
+        RT = FK[:3,:3]
+        filtered_wrench = np.array(self.filter.filter(self.current_wrench))
+        np.matmul(RT, filtered_wrench[:3], out = self.current_wrench_global[:3])
+        np.matmul(RT, filtered_wrench[:3], out = self.current_wrench_global[3:])
+        np.matmul(Ja.transpose(), self.current_wrench_global, out = self.current_joint_torque)
+        self.first_wrench_callback = False
 
     def daq_callback(self, data):
         previous_positions = deepcopy(self.current_daq_positions)
@@ -441,22 +466,43 @@ class ur5e_arm():
         print('remote : ',self.remote_control_running().program_running)
         return self.remote_control_running().program_running
 
-    ## TODO Fix the typo!
-    ## TODO Add a timeout in the while loop, replace the open-loop move_to with compliant move_to
-    def move_to_robost(self,
-                position,
-                speed = 0.25,
-                error_thresh = 0.01,
-                override_initial_joint_lims = False,
-                require_enable = False):
-        '''Calls the move_to method as necessary to ensure that the goal position
-        is reached, accounting for interruptions due to safety faults, and the
-        enable deadman if require_enable is selected'''
+    # move_to() function based on joint admittance controller
+    def move_to(self):
+        result = False
+        rate = rospy.Rate(sample_rate)
+        self.init_joint_admittance_controller()
+        while not rospy.is_shutdown():
+            current_homing_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
+            if not self.identify_joint_lim(current_homing_pos):
+                print('Homing desired position outside robot position limit. Please change dummy position')
+                result = False
+                break
+            #check safety
+            if not self.ready_to_move():
+                self.user_prompt_ready_to_move()
+                continue
+            #check enabled
+            if not self.enabled:
+                result = False
+                break
+            
+            self.joint_admittance_controller(current_homing_pos, self.homing_joint_speeds)
+            
+            if not np.any(np.abs(current_homing_pos - self.current_joint_positions)>0.01):
+                print("Home position reached")
+                result = True
+                break
+            #wait
+            rate.sleep()
+        self.stop_arm(safe = True)
+        self.vel_ref.data = np.array([0.0]*6)
+        return result
 
-        if require_enable:
-            print('Depress and hold the deadman switch when ready to move.')
-            print('Release to stop')
-
+    # homing() function: initialzing UR to default position
+    def homing(self):
+    
+        rate = rospy.Rate(sample_rate)
+        self.init_joint_admittance_controller()
         while not rospy.is_shutdown():
             #check safety
             if not self.ready_to_move():
@@ -464,102 +510,22 @@ class ur5e_arm():
                 continue
             #check enabled
             if not self.enabled:
+                self.stop_arm(safe = True)
+                self.vel_ref.data = np.array([0.0]*6)
                 time.sleep(0.01)
                 continue
-            #start moving
-            print('Starting Trajectory')
-            result = self.move_to(position,
-                                  speed = speed,
-                                  error_thresh = error_thresh,
-                                  override_initial_joint_lims = override_initial_joint_lims,
-                                  require_enable = require_enable)
-            if result:
-                break
-        print('Reached Goal')
+            
+            self.joint_admittance_controller(self.default_pos, self.homing_joint_speeds)
 
-    ## DEPRECATED
-    ## TODO Remove this function from all references 
-    def move_to(self,
-                position,
-                speed = 0.25,
-                error_thresh = 0.01,
-                override_initial_joint_lims = False,
-                require_enable = False):
-        '''CAUTION - use joint lim override with extreme caution. Intended to
-        allow movement from outside the lims back to acceptable position.
-
-        Defines a simple joing controller to bring the arm to a desired
-        configuration without teleop input. Intended for testing or to reach
-        present initial positions, etc.'''
-
-        #ensure safety sqitch is not enabled
-        if not self.ready_to_move():
-            self.user_prompt_ready_to_move()
-
-        #define max speed slow for safety
-        if speed > 0.5:
-            print("Limiting speed to 0.5 rad/sec")
-            speed = 0.5
-
-        #calculate traj from current position
-        start_pos = deepcopy(self.current_joint_positions)
-        max_disp = np.max(np.abs(position-start_pos))
-        end_time = max_disp/speed
-
-        #make sure this is a valid joint position
-        if not self.is_joint_position(position):
-            print("Invalid Joint Position, Exiting move_to function")
-            return False
-
-        #check joint llims
-        if not override_initial_joint_lims:
-            if not self.identify_joint_lim(start_pos):
-                print("Start Position Outside Joint Lims...")
-                return False
-        if not self.identify_joint_lim(position):
-            print("Commanded Postion Outside Joint Lims...")
-            return False
-
-
-        print('Executing Move to : \n{}\nIn {} seconds'.format(position,end_time))
-        #list of interpolators ... this is kind of dumb, there is probably a better solution
-        traj = [InterpolatedUnivariateSpline([0.,end_time],[start_pos[i],position[i]],k=1) for i in range(6)]
-
-        position_error = np.array([1.0]*6) #set high position error
-        pos_ref = deepcopy(start_pos)
-        rate = rospy.Rate(500) #lim loop to 500 hz
-        start_time = time.time()
-        reached_pos = False
-        while not self.shutdown and not rospy.is_shutdown() and self.safety_mode == 1: #chutdown is set on ctrl-c.
-            if require_enable and not self.enabled:
-                print('Lost Enable, stopping')
+            if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.01):
+                print("Home position reached")
                 break
 
-            loop_time = time.time()-start_time
-            if loop_time < end_time:
-                pos_ref[:] = [traj[i](loop_time) for i in range(6)]
-            else:
-                pos_ref = position
-                # break
-                if np.all(np.abs(position_error)<error_thresh):
-                    print("reached target position")
-                    self.stop_arm()
-                    reached_pos = True
-                    break
-
-            position_error = pos_ref - self.current_joint_positions
-            vel_ref_temp = self.joint_p_gains_varaible*position_error
-            #enforce max velocity setting
-            np.clip(vel_ref_temp,-joint_vel_lim,joint_vel_lim,vel_ref_temp)
-            self.vel_ref.data = vel_ref_temp
-            self.vel_pub.publish(self.vel_ref)
-            # print(pos_ref)
             #wait
             rate.sleep()
-
-        #make sure arm stops
+        
         self.stop_arm(safe = True)
-        return reached_pos
+        self.vel_ref.data = np.array([0.0]*6)
 
     ## TODO Refinement required
     def return_collison_free_config(self, reference_positon):
@@ -591,295 +557,66 @@ class ur5e_arm():
         if not self.ready_to_move():
             self.user_prompt_ready_to_move()
 
-        max_pos_error = 0.5 #radians/sec
-        low_joint_vel_lim = 0.5
+        rate = rospy.Rate(sample_rate)
+        self.init_joint_admittance_controller(capture_start_as_ref_pos, dialoge_enabled)
 
-        # impedance setting
-        # zeta = 0.707
-        zeta = 1.0
-        # virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
+        while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
+            self.joint_admittance_controller(self.current_daq_rel_positions_waraped + self.robot_ref_pos, self.max_joint_speeds)
 
-        coupling_stiffness = 200.0 * np.array([1, 1, 1, 0.2, 0.2, 0.2])
-        # inertia = 20.0 * np.array([1, 1, 1, 1, 1, 1])
-        coupling_damping = coupling_stiffness * 1.4
+            #wait
+            rate.sleep()
+        self.stop_arm(safe = True)
+        self.vel_ref.data = np.array([0.0]*6)
 
-        vel = np.zeros(6)
-        pos = np.zeros(6)
-        vel_ref = np.zeros(6)
-        pos_ref = np.zeros(6)
-
-        force = np.zeros(6)
-
-        vd = np.zeros(6)
-        ad = np.zeros(6)
-
-        joint_torque = np.zeros(6)
-        joint_vd = np.zeros(6)
-
-        wrench = np.zeros(6)
-        filtered_wrench = np.zeros(6)
-        wrench_global = np.zeros(6)
-
-        end_effector_inertia = 0.45 * np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
-        est_wrench_global = np.zeros(6)
-        end_effector_vel = np.zeros(6)
-        momentum_observer_gain = 60
-
-        pin_damping = 0.05
-
-        vel_ref_array = np.zeros(6)
-        load_mass_array = np.zeros(6)
-        rate = rospy.Rate(500)
-
-        self.filter.calculate_initial_values(self.current_wrench)
-
-        # initialization
-        joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
-        Ja = self.kdl_kin.jacobian(self.current_joint_positions)
-        FK = self.kdl_kin.forward(self.current_joint_positions)
-        RT = FK[:3,:3]
-        Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
-        FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
-        RT_ref = FK_ref[:3,:3]
-        wrench = self.current_wrench
-        filtered_wrench = np.array(self.filter.filter(wrench))
-        np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
-        np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-
-        recent_data_focus_coeff = 0.99
-        p = 1 / recent_data_focus_coeff
-        wrench_global_error = wrench_global
-        est_wrench_global = wrench_global
-        self.est_wrench_int_term = wrench_global / momentum_observer_gain
-
-        q = 1 / recent_data_focus_coeff
-        wrench_global_error_display = wrench_global
-
-        init_pos_ref = np.zeros(6)
-        init_pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
-        init_pos_ref[4] = np.arcsin(-RT_ref[2,0]) # theta
-        last_theta_ref = init_pos_ref[4]
-        init_pos_ref[5] = np.arctan2(RT_ref[1,0], RT_ref[0,0]) # phi
-        init_pos_ref[3] = np.arctan2(RT_ref[2,1], RT_ref[2,2]) # psi
-
-        init_pos = np.zeros(6)
-        init_pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-        init_pos[4] = np.arcsin(-RT[2,0]) # theta
-        last_theta = init_pos[4]
-        init_pos[5] = np.arctan2(RT[1,0], RT[0,0]) # phi
-        init_pos[3] = np.arctan2(RT[2,1], RT[2,2]) # psi
-
-        # go back to joint control
-        ref_pos = deepcopy(self.current_joint_positions)
-        position_error = np.zeros(6)
-        zeta = 1.0
-        virtual_stiffness = 400 * np.array([0.6, 1.0, 1.0, 1.0, 1.0, 1.0])
-        filtered_wrench = np.zeros(6)
-        wrench_global = np.zeros(6)
-        joint_desired_torque = np.zeros(6)
-        acc = np.zeros(6)
-        vr = np.zeros(6)
-
-
-        self.filter.calculate_initial_values(self.current_wrench)
-
-        Ja = self.kdl_kin.jacobian(self.current_joint_positions)
-        FK = self.kdl_kin.forward(self.current_joint_positions)
-        RT = FK[:3,:3]
-        wrench = self.current_wrench
-        filtered_wrench = np.array(self.filter.filter(wrench))
-        np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
-        np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-        np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
-        recent_data_focus_coeff = 0.99
-        p = 1 / recent_data_focus_coeff
-        joint_torque_error = joint_desired_torque
-        wrench_global_error = wrench_global
+    # online torque error id
+    def force_torque_error_estimation(self, position_error, force_error, force):
+        if not np.any(np.abs(position_error)>0.01) and not np.any(np.abs(self.current_joint_velocities)>0.001):
+            force_error += self.p / (1 + self.p) * (force - force_error)
+            self.p = (self.p - self.p ** 2 / (1 + self.p)) / self.recent_data_focus_coeff
+        return force_error
+        
+    # joint admittance controller initialization
+    def init_joint_admittance_controller(self,
+                                         capture_start_as_ref_pos = False,
+                                         dialoge_enabled = True):
+        
+        self.joint_torque_error = self.current_joint_torque
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
             self.current_daq_rel_positions_waraped = np.zeros(6)
-        # print('safety_mode',self.safety_mode)
-        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
-            # daq cartesian position
-            # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
-            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
-            np.subtract(ref_pos, self.current_joint_positions, position_error)
-            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
 
-            # jacobian
-            Ja = self.kdl_kin.jacobian(self.current_joint_positions)
-            FK = self.kdl_kin.forward(self.current_joint_positions)
-            RT = FK[:3,:3]
+    # joint admittance controller
+    def joint_admittance_controller(self,
+                                    ref_pos,
+                                    max_speeds):
+        np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
+        joint_pos_error = np.subtract(ref_pos, self.current_joint_positions)
+        vel_ref_array = np.multiply(joint_pos_error, self.joint_p_gains_varaible)
 
-            wrench = self.current_wrench
-            filtered_wrench = np.array(self.filter.filter(wrench))
-            np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
-            np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-            np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
+        self.joint_torque_error = self.force_torque_error_estimation(joint_pos_error, self.joint_torque_error, self.current_joint_torque)
+        joint_torque_after_correction = self.current_joint_torque - self.joint_torque_error
 
-            # online joint torque error id
-            if np.any(np.abs(position_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
-                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-                wg = wrench_global - wrench_global_error
-                flag = 1
-            else:
-                joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
-                wrench_global_error = wrench_global_error + p / (1 + p) * (wrench_global - wrench_global_error)
-                p = (p - p ** 2 / (1 + p)) / recent_data_focus_coeff
-                joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-                wg = wrench_global - wrench_global_error
-                flag = -1
-            
-            acc = (joint_desired_torque + virtual_stiffness * position_error 
-                    + 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * (self.current_daq_velocities - self.current_joint_velocities) 
-                    - 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * self.current_joint_velocities) / (self.inertia_offset)
-            np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
-            vr += acc / sample_rate
+        acc = (joint_torque_after_correction + self.joint_stiffness * joint_pos_error
+                + 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * (self.current_daq_velocities - self.current_joint_velocities)
+                - 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * self.current_joint_velocities) / self.joint_inertia
+        np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
+        vel_admittance = acc / sample_rate
 
-            vel_ref_array[2] += vr[2]
-            vel_ref_array[0] += vr[0]
-            vel_ref_array[1] += vr[1]
-            
-            ## TODO Make this a function and dynamically switchable
-            # # jacobian
-            # Ja = self.kdl_kin.jacobian(self.current_joint_positions)
-            # FK = self.kdl_kin.forward(self.current_joint_positions)
-            # RT = FK[:3,:3]
-            # Ja_ref = self.kdl_kin_op.jacobian(joint_daq_pos)
-            # FK_ref = self.kdl_kin_op.forward(joint_daq_pos)
-            # RT_ref = FK_ref[:3,:3]
+        vel_ref_array[0] += vel_admittance[0]
+        vel_ref_array[1] += vel_admittance[1]
+        vel_ref_array[2] += vel_admittance[2]
 
-            # pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
-            # #pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
-            # pos_ref[4] = np.arcsin(-RT_ref[2,0])
-            # if pos_ref[4] - last_theta_ref > np.pi/2:
-            #     pos_ref[4] = pos_ref[4] - np.pi
-            # elif pos_ref[4] - last_theta_ref < -np.pi/2:
-            #     pos_ref[4] = pos_ref[4] + np.pi
-            # las_theta_ref = pos_ref[4]
-            # cos_theta_ref_sign = np.sign(np.cos(pos_ref[4]))
-            # pos_ref[5] = np.arctan2(RT_ref[1,0]*cos_theta_ref_sign, RT_ref[0,0]*cos_theta_ref_sign) # phi
-            # pos_ref[3] = np.arctan2(RT_ref[2,1]*cos_theta_ref_sign, RT_ref[2,2]*cos_theta_ref_sign) # psi
+        np.clip(vel_ref_array, -max_speeds, max_speeds, vel_ref_array)
 
-            # pos[:3] = np.array([FK[0,3],FK[1,3],FK[2,3]])
-            # #pos[4] = np.arctan2(-RT[2,0], np.sqrt(RT[0,0]**2 + RT[1,0]**2)) # theta
-            # pos[4] = np.arcsin(-RT[2,0])
-            # if pos[4] - last_theta > np.pi/2:
-            #    pos[4] = pos[4] - np.pi
-            # elif pos[4] - last_theta < -np.pi/2:
-            #    pos[4] = pos[4] + np.pi
-            # last_theta = pos[4]
-            # cos_theta_sign = np.sign(np.cos(pos[4]))
-            # pos[5] = np.arctan2(RT[1,0]*cos_theta_sign, RT[0,0]*cos_theta_sign) # phi
-            # pos[3] = np.arctan2(RT[2,1]*cos_theta_sign, RT[2,2]*cos_theta_sign) # psi
+        #publish
+        self.vel_ref.data = vel_ref_array
+        # self.ref_vel_pub.publish(self.vel_ref)
+        self.vel_pub.publish(self.vel_ref)        
 
-            # np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
-            # np.matmul(Ja, self.current_joint_velocities, out = vel)
-            # vel_error = vel - vel_ref
-            
-            # # unwrap rotation position angle to go beyond -pi and pi
-            # for i in range(3,6):
-            #     if pos[i] - init_pos[i] > np.pi:
-            #         pos[i] = pos[i] - 2*np.pi
-            #     elif pos[i] - init_pos[i] < -np.pi:
-            #         pos[i] = pos[i] + 2*np.pi
+    # Cartesian admittance controller initialization
 
-            #     if pos_ref[i] - init_pos_ref[i] > np.pi:
-            #         pos_ref[i] = pos_ref[i] - 2*np.pi
-            #     elif pos_ref[i] - init_pos_ref[i] < -np.pi:
-            #         pos_ref[i] = pos_ref[i] + 2*np.pi
-
-            # pos_error = pos - pos_ref
-            # relative_pos_error = pos - init_pos - pos_ref + init_pos_ref
-            # relative_pos_error[3] = -relative_pos_error[3]
-            # relative_pos_error[4] = -relative_pos_error[4]
-
-            # wrench = self.current_wrench
-            # filtered_wrench = np.array(self.filter.filter(wrench))
-            # np.matmul(RT, filtered_wrench[:3], out = wrench_global[:3])
-            # np.matmul(RT, filtered_wrench[3:], out = wrench_global[3:])
-            # # np.matmul(Ja, self.current_joint_velocities, out = end_effector_vel)
-            # # self.est_wrench_int_term += (wrench_global - est_wrench_global) / sample_rate
-            # # est_wrench_global = momentum_observer_gain * (1.0 * end_effector_inertia * end_effector_vel + self.est_wrench_int_term)
-            # # np.matmul(Ja.transpose(), wrench_global, out = joint_desired_torque)
-
-            # # online joint torque error id
-            # # position_error = self.current_daq_positions + self.robot_ref_pos - self.current_joint_positions
-            # if np.any(np.abs(relative_pos_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
-            #     # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-            #     wg = wrench_global - wrench_global_error
-            #     flag = 1
-            # else:
-            #     # joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
-            #     wrench_global_error = wrench_global_error + p / (1 + p) * (wrench_global - wrench_global_error)
-            #     p = (p - p ** 2 / (1 + p)) / recent_data_focus_coeff
-            #     # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-            #     wg = wrench_global - wrench_global_error
-            #     flag = -1
-
-            # if np.any(np.abs(relative_pos_error)>0.02) or np.any(np.abs(self.current_joint_velocities)>0.02):
-            #     wgd = wrench_global - wrench_global_error_display
-            # else:
-            #     wrench_global_error_display = wrench_global_error_display + q / (1 + q) * (wrench_global - wrench_global_error_display)
-            #     q = (q - q ** 2 / (1 + q)) / recent_data_focus_coeff
-            #     wgd = wrench_global - wrench_global_error_display
-
-            load_mass_array = wg / 10
-            np.clip(load_mass_array,-100.0,0.0,load_mass_array)
-            self.load_mass.data = load_mass_array
-            if self.load_mass_publish_index < sample_rate / self.load_mass_publish_rate:
-                self.load_mass_publish_index = self.load_mass_publish_index + 1
-            else:
-                self.load_mass_publish_index = 0
-                self.load_mass_pub.publish(self.load_mass)
-
-            ## TODO Make this a function and dynamically switchable
-            # # cartesian integration approach
-            # # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
-            # # vd += ad / sample_rate
-            # # turn on or turn off rotation
-            # # vd_tool[3:5] = np.array([0,0])
-            # # damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
-            # # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
-            # # u,s,vh = np.linalg.svd(Ja)
-            # # print(s)
-            # # np.matmul(damped_psedu_inv, vd_tool, out = vd)
-            # # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
-
-            # # joint space inertia
-            # force = wg - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
-            # # force[:3] = wg[:3] - coupling_stiffness[:3] * relative_pos_error[:3] - coupling_damping[:3] * vel_error[:3]
-            # # force[3:] = - coupling_stiffness[3:] * relative_pos_error[3:] - coupling_damping[3:] * vel_error[3:]
-            # np.matmul(Ja.transpose(), force, out = joint_torque)
-            # joint_ad = joint_torque / self.inertia_offset
-            # np.clip(joint_ad,-self.max_joint_acc,self.max_joint_acc,joint_ad)
-            # joint_vd += joint_ad / sample_rate
-            # np.clip(joint_vd,-self.max_joint_speeds,self.max_joint_speeds,joint_vd)
-            # # joint_pos = deepcopy(self.current_joint_positions)
-            # # joint_pd = joint_pos + joint_vd / sample_rate
-            # vel_lower_bound = (self.lower_lims - self.current_joint_positions) * sample_rate
-            # np.clip(vel_lower_bound,-self.max_joint_speeds,0.0,vel_lower_bound)
-            # vel_upper_bound = (self.upper_lims - self.current_joint_positions) * sample_rate
-            # np.clip(vel_upper_bound,0.0,self.max_joint_speeds,vel_upper_bound)
-            # np.clip(joint_vd,vel_lower_bound,vel_upper_bound,joint_vd)
-
-            # vel_ref_array = joint_vd
-
-            #enforce max velocity setting
-            np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
-
-            # self.test_data.data = vel_error
-            self.test_data_pub.publish(self.test_data)
-
-            #publish
-            self.vel_ref.data = vel_ref_array
-            # self.ref_vel_pub.publish(self.vel_ref)
-            self.vel_pub.publish(self.vel_ref)
-            #wait
-            rate.sleep()
-        self.stop_arm(safe = True)
+    # Cartesian admittance controller
 
     ## TODO Main loop, add saftey handling here
     def run(self):
@@ -898,14 +635,15 @@ class ur5e_arm():
             if not self.enabled:
                 time.sleep(0.01)
                 continue
-            current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
-            if not self.identify_joint_lim(current_homing_pos):
-                print('Homing desired position outside robot position limit. Please change dummy position')
-                continue
+            # current_homing_pos = deepcopy(self.current_daq_positions * joint_inversion + self.daq_ref_pos)
+            # if not self.identify_joint_lim(current_homing_pos):
+            #     print('Homing desired position outside robot position limit. Please change dummy position')
+            #     continue
             
             self.is_homing = True
             self.is_homing_pub.publish(self.is_homing)
-            reached_home = self.move_to(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
+            # reached_home = self.move_to(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
+            reached_home = self.move_to()
             self.is_homing = False
             self.is_homing_pub.publish(self.is_homing)
             if reached_home:
@@ -924,11 +662,11 @@ if __name__ == "__main__":
     time.sleep(1)
     arm.stop_arm()
 
-    print(arm.move_to_robost(arm.default_pos,
-                             speed = 0.1,
-                             override_initial_joint_lims=True,
-                             require_enable = True))
-
+    # print(arm.move_to_robost(arm.default_pos,
+    #                          speed = 0.1,
+    #                          override_initial_joint_lims=True,
+    #                          require_enable = True))
+    arm.homing()
 
     pose = forward(arm.current_joint_positions)
     print(pose)
