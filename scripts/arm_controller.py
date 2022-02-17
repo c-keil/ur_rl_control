@@ -81,8 +81,10 @@ class ur5e_arm():
     conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    homing_joint_speeds = 0.1 * np.array([1.0]*6)
+    max_joint_acc = 5.0 * np.array([1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
+    homing_joint_speeds = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
+    jogging_joint_speeds = 2.0 * homing_joint_speeds
+    homing_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
@@ -127,6 +129,8 @@ class ur5e_arm():
 
     recent_data_focus_coeff = 0.99
     p = 1 / recent_data_focus_coeff
+
+    last_command_joint_velocities = np.zeros(6)
 
     tree = kdl_tree_from_urdf_model(robot)
     # print tree.getNrOfSegments()
@@ -486,7 +490,9 @@ class ur5e_arm():
                 result = False
                 break
             
-            self.joint_admittance_controller(current_homing_pos, self.homing_joint_speeds)
+            self.joint_admittance_controller(ref_pos = current_homing_pos,
+                                             max_speeds = self.jogging_joint_speeds,
+                                             max_acc = self.homing_joint_acc)
             
             if not np.any(np.abs(current_homing_pos - self.current_joint_positions)>0.01):
                 print("Home position reached")
@@ -515,7 +521,9 @@ class ur5e_arm():
                 time.sleep(0.01)
                 continue
             
-            self.joint_admittance_controller(self.default_pos, self.homing_joint_speeds)
+            self.joint_admittance_controller(ref_pos = self.default_pos,
+                                             max_speeds = self.homing_joint_speeds,
+                                             max_acc = self.homing_joint_acc)
 
             if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.01):
                 print("Home position reached")
@@ -561,7 +569,9 @@ class ur5e_arm():
         self.init_joint_admittance_controller(capture_start_as_ref_pos, dialoge_enabled)
 
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
-            self.joint_admittance_controller(self.current_daq_rel_positions_waraped + self.robot_ref_pos, self.max_joint_speeds)
+            self.joint_admittance_controller(ref_pos = self.current_daq_rel_positions_waraped + self.robot_ref_pos,
+                                             max_speeds = self.max_joint_speeds,
+                                             max_acc = self.max_joint_acc)
 
             #wait
             rate.sleep()
@@ -589,7 +599,8 @@ class ur5e_arm():
     # joint admittance controller
     def joint_admittance_controller(self,
                                     ref_pos,
-                                    max_speeds):
+                                    max_speeds,
+                                    max_acc):
         np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
         joint_pos_error = np.subtract(ref_pos, self.current_joint_positions)
         vel_ref_array = np.multiply(joint_pos_error, self.joint_p_gains_varaible)
@@ -607,7 +618,9 @@ class ur5e_arm():
         vel_ref_array[1] += vel_admittance[1]
         vel_ref_array[2] += vel_admittance[2]
 
+        np.clip(vel_ref_array, self.last_command_joint_velocities - max_acc / sample_rate, self.last_command_joint_velocities + max_acc / sample_rate, vel_ref_array)
         np.clip(vel_ref_array, -max_speeds, max_speeds, vel_ref_array)
+        self.last_command_joint_velocities = vel_ref_array
 
         #publish
         self.vel_ref.data = vel_ref_array
