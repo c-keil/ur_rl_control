@@ -590,7 +590,8 @@ class ur5e_arm():
                                          capture_start_as_ref_pos = False,
                                          dialoge_enabled = True):
         
-        self.joint_torque_error = self.current_joint_torque
+        self.joint_torque_error = deepcopy(self.current_joint_torque)
+        self.vel_admittance = np.zeros(6)
 
         if capture_start_as_ref_pos:
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
@@ -611,12 +612,12 @@ class ur5e_arm():
         acc = (joint_torque_after_correction + self.joint_stiffness * joint_pos_error
                 + 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * (self.current_daq_velocities - self.current_joint_velocities)
                 - 0.5 * 2 * self.zeta * np.sqrt(self.joint_stiffness * self.joint_inertia) * self.current_joint_velocities) / self.joint_inertia
-        np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
-        vel_admittance = acc / sample_rate
+        np.clip(acc, -max_acc, max_acc, acc)
+        self.vel_admittance += acc / sample_rate
 
-        vel_ref_array[0] += vel_admittance[0]
-        vel_ref_array[1] += vel_admittance[1]
-        vel_ref_array[2] += vel_admittance[2]
+        vel_ref_array[0] += self.vel_admittance[0]
+        vel_ref_array[1] += self.vel_admittance[1]
+        vel_ref_array[2] += self.vel_admittance[2]
 
         np.clip(vel_ref_array, self.last_command_joint_velocities - max_acc / sample_rate, self.last_command_joint_velocities + max_acc / sample_rate, vel_ref_array)
         np.clip(vel_ref_array, -max_speeds, max_speeds, vel_ref_array)
