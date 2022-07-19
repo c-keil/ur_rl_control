@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 import rospy
 import rospkg
 import numpy as np
@@ -8,13 +8,13 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 
 from filter import PythonBPF
 
-from ur_kinematics.ur_kin_py import forward, forward_link
-from kinematics import analytical_ik, nearest_ik_solution
+# from ur_kinematics.ur_kin_py import forward, forward_link
+# from kinematics import analytical_ik, nearest_ik_solution
 
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
-from ur5teleop.msg import jointdata, Joint
+# from ur5teleop.msg import jointdata, Joint
 from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
@@ -543,26 +543,26 @@ class ur5e_arm():
         self.stop_arm(safe = True)
         return reached_pos
 
-    def return_collison_free_config(self, reference_positon):
-        '''takes the proposed set of joint positions for the real robot and
-        checks the forward kinematics for collisions with the floor plane and the
-        defined gripper points. Returns the neares position with the same orientation
-        that is not violating the floor constraint.'''
-        pose = forward(reference_positon)
-        collision_positions = np.dot(pose, gripper_collision_points)
-
-        min_point = np.argmin(collision_positions[2,:])
-        collision = collision_positions[2,min_point] < self.z_axis_lim
-        if collision:
-            # print('Z axis overrun: {}'.format(pose[2,3]))
-            #saturate pose
-            diff = pose[2,3] - collision_positions[2][min_point]
-            # print(diff)
-            pose[2,3] = self.z_axis_lim + diff
-            # pose[2,3] = self.z_axis_lim
-            #get joint ref
-            reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
-        return reference_positon
+    # def return_collison_free_config(self, reference_positon):
+    #     '''takes the proposed set of joint positions for the real robot and
+    #     checks the forward kinematics for collisions with the floor plane and the
+    #     defined gripper points. Returns the neares position with the same orientation
+    #     that is not violating the floor constraint.'''
+    #     pose = self.kdl_kin.forward(reference_positon)
+    #     collision_positions = np.dot(pose, gripper_collision_points)
+    #
+    #     min_point = np.argmin(collision_positions[2,:])
+    #     collision = collision_positions[2,min_point] < self.z_axis_lim
+    #     if collision:
+    #         # print('Z axis overrun: {}'.format(pose[2,3]))
+    #         #saturate pose
+    #         diff = pose[2,3] - collision_positions[2][min_point]
+    #         # print(diff)
+    #         pose[2,3] = self.z_axis_lim + diff
+    #         # pose[2,3] = self.z_axis_lim
+    #         #get joint ref
+    #         reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
+    #     return reference_positon
 
     def move(self,
              capture_start_as_ref_pos = False,
@@ -711,9 +711,9 @@ class ur5e_arm():
                 joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
                 wg = wrench_global - wrench_global_error
                 flag = -1
-            
-            acc = (joint_desired_torque + virtual_stiffness * position_error 
-                    + 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * (self.current_daq_velocities - self.current_joint_velocities) 
+
+            acc = (joint_desired_torque + virtual_stiffness * position_error
+                    + 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * (self.current_daq_velocities - self.current_joint_velocities)
                     - 0.5 * 2 * zeta * np.sqrt(virtual_stiffness * self.inertia_offset) * self.current_joint_velocities) / (self.inertia_offset)
             np.clip(acc, -self.max_joint_acc, self.max_joint_acc, acc)
             vr += acc / sample_rate
@@ -721,7 +721,7 @@ class ur5e_arm():
             vel_ref_array[2] += vr[2]
             vel_ref_array[0] += vr[0]
             vel_ref_array[1] += vr[1]
-            
+
             # # jacobian
             # Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             # FK = self.kdl_kin.forward(self.current_joint_positions)
@@ -757,7 +757,7 @@ class ur5e_arm():
             # np.matmul(Ja_ref, self.current_daq_velocities, out = vel_ref)
             # np.matmul(Ja, self.current_joint_velocities, out = vel)
             # vel_error = vel - vel_ref
-            
+
             # # unwrap rotation position angle to go beyond -pi and pi
             # for i in range(3,6):
             #     if pos[i] - init_pos[i] > np.pi:
@@ -879,7 +879,7 @@ class ur5e_arm():
             if not self.identify_joint_lim(current_homing_pos):
                 print('Homing desired position outside robot position limit. Please change dummy position')
                 continue
-            
+
             self.is_homing = True
             self.is_homing_pub.publish(self.is_homing)
             reached_goal = self.move_to(current_homing_pos,speed = 0.2,override_initial_joint_lims=True,require_enable = True)
@@ -897,7 +897,7 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("starting")
 
-    arm = ur5e_arm(test_control_signal=False, conservative_joint_lims = False)
+    arm = ur5e_arm(test_control_signal=True, conservative_joint_lims = False)
     time.sleep(1)
     arm.stop_arm()
 
@@ -925,7 +925,7 @@ if __name__ == "__main__":
     # if 'y'==raw_input('Execute Move? (y/n)'):
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
-    pose = forward(arm.current_joint_positions)
+    pose = arm.kdl_kin.forward(arm.current_joint_positions)
     print(pose)
     raw_input("Hit enter when ready to move")
     # arm.move()
