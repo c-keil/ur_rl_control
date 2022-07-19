@@ -70,15 +70,20 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -45.0, 180.0])
+    # default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -45.0, 180.0])
+    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, 0.0, 90.0, 90.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
 
-    lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
-    upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
-    conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
-    conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
+    # lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
+    # upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
+    # conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
+    # conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
+    lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -90.0, 0.0, 0.0])
+    upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 90.0, 180.0, 180.0])
+    conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -90.0, 0.0, 0.0])
+    conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, 90.0, 180.0, 180.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 5.0 * np.array([1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
@@ -455,7 +460,7 @@ class ur5e_arm():
         '''expects an array of joint positions. Prints a human readable list of
         joints that exceed limmits, if any'''
         if self.in_joint_lims(position):
-            print("All joints ok")
+            # print("All joints ok")
             return True
         else:
             for i, pos in enumerate(position):
@@ -494,7 +499,7 @@ class ur5e_arm():
                                              max_speeds = self.jogging_joint_speeds,
                                              max_acc = self.homing_joint_acc)
             
-            if not np.any(np.abs(current_homing_pos - self.current_joint_positions)>0.01):
+            if not np.any(np.abs(current_homing_pos - self.current_joint_positions)>0.1):
                 print("Home position reached")
                 result = True
                 break
@@ -525,7 +530,7 @@ class ur5e_arm():
                                              max_speeds = self.homing_joint_speeds,
                                              max_acc = self.homing_joint_acc)
 
-            if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.01):
+            if not np.any(np.abs(self.default_pos - self.current_joint_positions)>0.05):
                 print("Home position reached")
                 break
 
