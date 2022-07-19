@@ -54,7 +54,7 @@ class ur5e_arm():
     '''
     safety_mode = -1
     shutdown = False
-    enabled = False
+    enabled = True #not safe
     jogging = False
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
@@ -68,15 +68,15 @@ class ur5e_arm():
     joint_p_gains_varaible = np.array([5.0, 5.0, 5.0, 10.0, 10.0, 10.0]) #works up to at least 20 on wrist 3
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
-    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, -90.0, -45.0, 180.0])
+    default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, 0.0, 90.0, 90.0])
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
 
-    lower_lims = (np.pi/180)*np.array([5.0, -120.0, 5.0, -150.0, -175.0, 95.0])
-    upper_lims = (np.pi/180)*np.array([175.0, 5.0, 175.0, 5.0, 5.0, 265.0])
-    conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
-    conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
+    lower_lims = (np.pi/180)*np.array([0, -120, 0, -90, 0, 0])
+    upper_lims = (np.pi/180)*np.array([180, 5, 180, 90, 180, 210.0])
+    # conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
+    # conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
     # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -158,9 +158,9 @@ class ur5e_arm():
         rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
         #start subscriber for deadman enable
-        rospy.Subscriber('/enable_move',Bool,self.enable_callback)
+        # rospy.Subscriber('/enable_move',Bool,self.enable_callback)
         #start subscriber for jogging enable
-        rospy.Subscriber('/jogging',Bool,self.jogging_callback)
+        # rospy.Subscriber('/jogging',Bool,self.jogging_callback)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
