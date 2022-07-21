@@ -912,16 +912,19 @@ if __name__ == "__main__":
                              speed = 0.1,
                              override_initial_joint_lims=True,
                              require_enable = True))
-
+    print(arm.move_to_robost(arm.default_pos+np.array([0, 0, 0, 0, 0, np.pi/4]),
+                             speed = 0.1,
+                             override_initial_joint_lims=True,
+                             require_enable = True))
 
     # arm.capture_control_arm_ref_position()
     # print("Current Arm Position")
     # print(arm.current_joint_positions)
     # print("DAQ position:")
-    # print(arm.current_daq_positions)
-    # daq_pos = deepcopy(arm.current_daq_positions)
-    # daq_offset = arm.current_daq_positions - arm.control_arm_def_config
-    # print("DAQ offset from default pos: \n{}".format(daq_offset))
+    # print(arm.current_daq_positions)print(arm.move_to_robost(arm.default_pos,
+                             speed = 0.1,
+                             override_initial_joint_lims=True,
+                             require_enable = True))
     # if 'y'==raw_input('Execute Move? (y/n)'):
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
