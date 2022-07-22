@@ -737,12 +737,12 @@ class ur5e_arm():
                               angular_vel_error[2]]).reshape((6,1))
 
             #convert to joint velocities
-            # TODO fix vel ref error 
-            vel_ref_array = (np.linalg.inv(Ja)*error).reshape(-1)
+            vel_ref_array = np.matmul(np.linalg.inv(Ja),error).reshape(-1)
             # print(type(Ja))
             # print(np.linalg.inv(Ja))
             # print(type(error))
             # print(cartesian_position_error)
+            #TODO position_error change usage to joint_position_error
             print("angular vel error")
             print(angular_vel_error)
             print("joint vels")
