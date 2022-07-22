@@ -1,6 +1,8 @@
 #! /usr/bin/env python
+from multiprocessing import current_process
 import rospy
 import rospkg
+import tf
 import numpy as np
 from copy import deepcopy
 import time
@@ -55,6 +57,7 @@ class ur5e_arm():
     safety_mode = -1
     shutdown = False
     enabled = True #not safe
+    traj_active = False #used to determine when a trajectory has been sent to the robot in the control loop
     jogging = False
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
@@ -69,6 +72,7 @@ class ur5e_arm():
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, 0.0, 90.0, 90.0])
+    cartesian_ref_pose = np.eye(4) #TODO make initialization roboust
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
@@ -90,6 +94,7 @@ class ur5e_arm():
     #define fields that are updated by the subscriber callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
+    current_pose = np.eye(4)
 
     current_daq_positions = np.zeros(6)
     current_daq_velocities = np.zeros(6)
@@ -135,6 +140,9 @@ class ur5e_arm():
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
         self.z_axis_lim = -0.37 # floor 0.095 #short table # #0.0 #table
+
+        #set cartesian ref pos to current pose (should be reset by the user as the start point for any experiment)
+        self.set_ref_pose_to_current()
 
         #launch nodes
         rospy.init_node('teleop_controller', anonymous=True)
@@ -209,6 +217,20 @@ class ur5e_arm():
             self.user_prompt_ready_to_move()
         else:
             print('Ready to move')
+
+    def set_ref_pose_to_current(self):
+        self.cartesian_ref_pose = self.kdl_kin.forward(self.current_joint_positions)
+        return True
+
+    def get_cartesian_ref_posion(self):
+        return np.array(self.cartesian_ref_pose[:3,3]).reshape(-1)
+    
+    def get_cartesian_ref_orientation(self):
+        return self.cartesian_ref_pose[:3,:3]
+    
+    def get_cartesian_ref_quaternion(self):
+        return tf.transformations.quaternion_from_matrix(self.cartesian_ref_pose)
+
 
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
@@ -609,7 +631,8 @@ class ur5e_arm():
 
         vel_ref_array = np.zeros(6)
         load_mass_array = np.zeros(6)
-        rate = rospy.Rate(500)
+        self.vel_ref.data = vel_ref_array
+        rate = rospy.Rate(1) #TODO put back to 500 
 
         self.filter.calculate_initial_values(self.current_wrench)
 
@@ -681,17 +704,51 @@ class ur5e_arm():
             self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
-            # daq cartesian position
-            # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
-            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
-            np.subtract(ref_pos, self.current_joint_positions, position_error)
-            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
+            # # daq cartesian position
+            # # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
+            # np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            # np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
+            # np.subtract(ref_pos, self.current_joint_positions, position_error)
+            # np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
 
             # jacobian
-            Ja = self.kdl_kin.jacobian(self.current_joint_positions)
-            FK = self.kdl_kin.forward(self.current_joint_positions)
+            Ja = np.array(self.kdl_kin.jacobian(self.current_joint_positions))
+            FK = np.array(self.kdl_kin.forward(self.current_joint_positions))
             RT = FK[:3,:3]
+
+            #calculate cartesian error
+            if self.traj_active:
+                print('calculcating desired position')    
+                #calculate desired position
+
+            #calculate cartesian error
+            self.current_pose = FK 
+            cartesian_position_error = self.get_cartesian_ref_posion().reshape(-1) - self.current_pose[:3,3]
+            current_orientation = tf.transformations.quaternion_from_matrix(FK)
+            orientation_error = tf.transformations.quaternion_multiply(self.get_cartesian_ref_quaternion(), tf.transformations.quaternion_inverse(current_orientation))
+            axis, angle = get_quaternion_axis_angle(orientation_error)
+            angular_vel_error = axis*angle
+            # TODO cap cartesian error
+            error = np.array([cartesian_position_error[0],
+                              cartesian_position_error[1], 
+                              cartesian_position_error[2], 
+                              angular_vel_error[0], 
+                              angular_vel_error[1], 
+                              angular_vel_error[2]]).reshape((6,1))
+
+            #convert to joint velocities
+            # TODO fix vel ref error 
+            vel_ref_array = (np.linalg.inv(Ja)*error).reshape(-1)
+            # print(type(Ja))
+            # print(np.linalg.inv(Ja))
+            # print(type(error))
+            # print(cartesian_position_error)
+            print("angular vel error")
+            print(angular_vel_error)
+            print("joint vels")
+            print(vel_ref_array)
+            print("")
+            
 
             wrench = self.current_wrench
             filtered_wrench = np.array(self.filter.filter(wrench))
@@ -722,7 +779,11 @@ class ur5e_arm():
             vel_ref_array[0] += vr[0]
             vel_ref_array[1] += vr[1]
 
-            # # jacobian
+            '''*************************************************************************************'''
+
+            # # # jacobian
+            # # calculate cartesian position and orientation error 
+            # # TODO switch from euler angle error to quaternion error calculation
             # Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             # FK = self.kdl_kin.forward(self.current_joint_positions)
             # RT = FK[:3,:3]
@@ -733,9 +794,7 @@ class ur5e_arm():
             # pos_ref[:3] = np.array([FK_ref[0,3],FK_ref[1,3],FK_ref[2,3]])
             # #pos_ref[4] = np.arctan2(-RT_ref[2,0], np.sqrt(RT_ref[0,0]**2 + RT_ref[1,0]**2)) # theta
             # pos_ref[4] = np.arcsin(-RT_ref[2,0])
-            # if pos_ref[4] - last_theta_ref > np.pi/2:
-            #     pos_ref[4] = pos_ref[4] - np.pi
-            # elif pos_ref[4] - last_theta_ref < -np.pi/2:
+            # 500elif pos_ref[4] - last_theta_ref < -np.pi/2:
             #     pos_ref[4] = pos_ref[4] + np.pi
             # las_theta_ref = pos_ref[4]
             # cos_theta_ref_sign = np.sign(np.cos(pos_ref[4]))
@@ -788,43 +847,32 @@ class ur5e_arm():
             # # position_error = self.current_daq_positions + self.robot_ref_pos - self.current_joint_positions
             # if np.any(np.abs(relative_pos_error)>0.01) or np.any(np.abs(self.current_joint_velocities)>0.001):
             #     # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-            #     wg = wrench_global - wrench_global_error
-            #     flag = 1
-            # else:
-            #     # joint_torque_error = joint_torque_error + p / (1 + p) * (joint_desired_torque - joint_torque_error)
-            #     wrench_global_error = wrench_global_error + p / (1 + p) * (wrench_global - wrench_global_error)
-            #     p = (p - p ** 2 / (1 + p)) / recent_data_focus_coeff
-            #     # joint_desired_torque_after_correction = joint_desired_torque - joint_torque_error
-            #     wg = wrench_global - wrench_global_error
-            #     flag = -1
-
-            # if np.any(np.abs(relative_pos_error)>0.02) or np.any(np.abs(self.current_joint_velocities)>0.02):
-            #     wgd = wrench_global - wrench_global_error_display
+            #     wg = wrench_global - wrench_global_errorvel_ref_array
             # else:
             #     wrench_global_error_display = wrench_global_error_display + q / (1 + q) * (wrench_global - wrench_global_error_display)
             #     q = (q - q ** 2 / (1 + q)) / recent_data_focus_coeff
             #     wgd = wrench_global - wrench_global_error_display
-
-            load_mass_array = wg / 10
-            np.clip(load_mass_array,-100.0,0.0,load_mass_array)
-            self.load_mass.data = load_mass_array
-            if self.load_mass_publish_index < sample_rate / self.load_mass_publish_rate:
-                self.load_mass_publish_index = self.load_mass_publish_index + 1
-            else:
-                self.load_mass_publish_index = 0
-                self.load_mass_pub.publish(self.load_mass)
+            
+            # load_mass_array = wg / 10
+            # np.clip(load_mass_array,-100.0,0.0,load_mass_array)
+            # self.load_mass.data = load_mass_array
+            # if self.load_mass_publish_index < sample_rate / self.load_mass_publish_rate:
+            #     self.load_mass_publish_index = self.load_mass_publish_index + 1
+            # else:
+            #     self.load_mass_publish_index = 0
+            #     self.load_mass_pub.publish(self.load_mass)
 
             # # cartesian integration approach
-            # # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
-            # # vd += ad / sample_rate
+            # ad = (wg - virtual_stiffness * relative_pos - 2 * zeta * np.sqrt(virtual_stiffness * inertia) * vel) / inertia
+            # vd += ad / sample_rate
             # # turn on or turn off rotation
-            # # vd_tool[3:5] = np.array([0,0])
-            # # damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
-            # # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
-            # # u,s,vh = np.linalg.svd(Ja)
+            # vd_tool[3:5] = np.array([0,0])
+            # damped_psedu_inv = np.matmul(Ja.transpose(),np.linalg.inv(np.matmul(Ja,Ja.transpose()) + pin_damping**2*np.identity(6)))
+            # np.matmul(np.linalg.inv(Ja), vd_tool, out = vd)
+            # u,s,vh = np.linalg.svd(Ja)
             # # print(s)
-            # # np.matmul(damped_psedu_inv, vd_tool, out = vd)
-            # # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
+            # np.matmul(damped_psedu_inv, vd_tool, out = vd)
+            # np.clip(vd,-self.max_joint_speeds,self.max_joint_speeds,vd)
 
             # # joint space inertia
             # force = wg - coupling_stiffness * relative_pos_error - coupling_damping * vel_error
@@ -853,6 +901,7 @@ class ur5e_arm():
 
             #publish
             self.vel_ref.data = vel_ref_array
+            self.vel_ref.data = 0*vel_ref_array #TODO remove safety calculation
             # self.ref_vel_pub.publish(self.vel_ref)
             self.vel_pub.publish(self.vel_ref)
             #wait
@@ -891,7 +940,23 @@ class ur5e_arm():
                 self.move(capture_start_as_ref_pos = True,
                           dialoge_enabled = False)
 
+def get_quaternion_axis_angle(q):
+    '''returns axis angle representation for a quaternion. Alays returns the minimum angle rotation direction'''
+    q = np.array(q)/np.linalg.norm(q)
 
+    angle = 2 * np.arccos(q[3])
+    #check for angle = 0
+    if angle > 0.0001:
+        axis = q[:3] / np.sqrt(1-q[3]*q[3])
+        #check for angle greater than pi
+        # TODO check that this is actually what we want to do
+        if angle > np.pi:
+            angle = 2*np.pi - angle
+            axis *= -1  
+    else:
+        axis = np.array([1,0,0]) #arbitrary axis
+
+    return axis, angle
 
 if __name__ == "__main__":
     #This script is included for testing purposes
@@ -912,19 +977,17 @@ if __name__ == "__main__":
                              speed = 0.1,
                              override_initial_joint_lims=True,
                              require_enable = True))
-    print(arm.move_to_robost(arm.default_pos+np.array([0, 0, 0, 0, 0, np.pi/4]),
-                             speed = 0.1,
-                             override_initial_joint_lims=True,
-                             require_enable = True))
-
+    arm.set_ref_pose_to_current()
+    print(arm.cartesian_ref_pose)
     # arm.capture_control_arm_ref_position()
     # print("Current Arm Position")
     # print(arm.current_joint_positions)
     # print("DAQ position:")
-    # print(arm.current_daq_positions)print(arm.move_to_robost(arm.default_pos,
-                             speed = 0.1,
-                             override_initial_joint_lims=True,
-                             require_enable = True))
+    # print(arm.current_daq_positions)
+    # print(arm.move_to_robost(arm.default_pos,
+    #                          speed = 0.1,
+    #                          override_initial_joint_lims=True,
+    #                          require_enable = True))
     # if 'y'==raw_input('Execute Move? (y/n)'):
     #     target_pos = arm.default_pos + daq_offset
     #     arm.move_to(target_pos, speed = 0.1, override_initial_joint_lims=False)
