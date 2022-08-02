@@ -55,8 +55,8 @@ CAUTION: Check the initial joint configuration and make sure it is near the defa
 
 Launch the base ur_robot_driver with the correct vel controller and other def
 parameters with
-`roslaunch ur_teleop_controller ur5e_driver.launch`
+`roslaunch ur_rl_control ur5e_driver.launch`
 Start the daq node with:
 `rosrun ur5teleop daqnode.py`
 Start the controller node with:
-`rosrun ur_teleop_controller arm_controller.py`
+`rosrun ur_rl_control arm_controller.py`

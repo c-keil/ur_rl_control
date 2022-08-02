@@ -27,7 +27,7 @@ from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
 from pykdl_utils.kdl_kinematics import KDLKinematics
 
 r = rospkg.RosPack()
-path = r.get_path('ur_teleop_controller')
+path = r.get_path('ur_rl_control')
 robot = URDF.from_xml_file(path+"/config/ur5e.urdf")
 dummy_arm = URDF.from_xml_file(path+"/config/dummy_arm.urdf")
 
@@ -224,10 +224,10 @@ class ur5e_arm():
 
     def get_cartesian_ref_posion(self):
         return np.array(self.cartesian_ref_pose[:3,3]).reshape(-1)
-    
+
     def get_cartesian_ref_orientation(self):
         return self.cartesian_ref_pose[:3,:3]
-    
+
     def get_cartesian_ref_quaternion(self):
         return tf.transformations.quaternion_from_matrix(self.cartesian_ref_pose)
 
@@ -632,7 +632,7 @@ class ur5e_arm():
         vel_ref_array = np.zeros(6)
         load_mass_array = np.zeros(6)
         self.vel_ref.data = vel_ref_array
-        rate = rospy.Rate(1) #TODO put back to 500 
+        rate = rospy.Rate(1) #TODO put back to 500
 
         self.filter.calculate_initial_values(self.current_wrench)
 
@@ -718,11 +718,11 @@ class ur5e_arm():
 
             #calculate cartesian error
             if self.traj_active:
-                print('calculcating desired position')    
+                print('calculcating desired position')
                 #calculate desired position
 
             #calculate cartesian error
-            self.current_pose = FK 
+            self.current_pose = FK
             cartesian_position_error = self.get_cartesian_ref_posion().reshape(-1) - self.current_pose[:3,3]
             current_orientation = tf.transformations.quaternion_from_matrix(FK)
             orientation_error = tf.transformations.quaternion_multiply(self.get_cartesian_ref_quaternion(), tf.transformations.quaternion_inverse(current_orientation))
@@ -730,10 +730,10 @@ class ur5e_arm():
             angular_vel_error = axis*angle
             # TODO cap cartesian error
             error = np.array([cartesian_position_error[0],
-                              cartesian_position_error[1], 
-                              cartesian_position_error[2], 
-                              angular_vel_error[0], 
-                              angular_vel_error[1], 
+                              cartesian_position_error[1],
+                              cartesian_position_error[2],
+                              angular_vel_error[0],
+                              angular_vel_error[1],
                               angular_vel_error[2]]).reshape((6,1))
 
             #convert to joint velocities
@@ -748,7 +748,7 @@ class ur5e_arm():
             print("joint vels")
             print(vel_ref_array)
             print("")
-            
+
 
             wrench = self.current_wrench
             filtered_wrench = np.array(self.filter.filter(wrench))
@@ -782,7 +782,7 @@ class ur5e_arm():
             '''*************************************************************************************'''
 
             # # # jacobian
-            # # calculate cartesian position and orientation error 
+            # # calculate cartesian position and orientation error
             # # TODO switch from euler angle error to quaternion error calculation
             # Ja = self.kdl_kin.jacobian(self.current_joint_positions)
             # FK = self.kdl_kin.forward(self.current_joint_positions)
@@ -852,7 +852,7 @@ class ur5e_arm():
             #     wrench_global_error_display = wrench_global_error_display + q / (1 + q) * (wrench_global - wrench_global_error_display)
             #     q = (q - q ** 2 / (1 + q)) / recent_data_focus_coeff
             #     wgd = wrench_global - wrench_global_error_display
-            
+
             # load_mass_array = wg / 10
             # np.clip(load_mass_array,-100.0,0.0,load_mass_array)
             # self.load_mass.data = load_mass_array
@@ -952,7 +952,7 @@ def get_quaternion_axis_angle(q):
         # TODO check that this is actually what we want to do
         if angle > np.pi:
             angle = 2*np.pi - angle
-            axis *= -1  
+            axis *= -1
     else:
         axis = np.array([1,0,0]) #arbitrary axis
 

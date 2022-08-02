@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>ur_teleop_controller</name>
+  <name>ur_rl_control</name>
   <version>0.0.0</version>
-  <description>The ur_teleop_controller package</description>
+  <description>The ur_rl_control package</description>
 
   <!-- One maintainer tag required, multiple allowed, one person per tag -->
   <!-- Example:  -->
