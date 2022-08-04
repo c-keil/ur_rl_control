@@ -90,6 +90,10 @@ class ur5e_arm():
     #define fields that are updated by the subscriber callbacks
     current_joint_positions = np.zeros(6)
     current_joint_velocities = np.zeros(6)
+    commanded_joint_positions = np.zeros(6)
+    commanded_joint_velocities = np.zeros(6)
+    
+    
     current_pose = np.eye(4)
 
     current_daq_positions = np.zeros(6)
@@ -145,6 +149,8 @@ class ur5e_arm():
         else:
             rospy.Subscriber("daqdata_filtered", jointdata, self.daq_callback)
 
+        #subscriber for position commands
+        rospy.Subscriber('/ref_pos', JointState, self.ref_pos_callback)
         #start robot state subscriber (detects fault or estop press)
         rospy.Subscriber('/ur_hardware_interface/safety_mode',SafetyMode, self.safety_callback)
         #joint feedback subscriber
@@ -157,10 +163,7 @@ class ur5e_arm():
         #service to check safety mode
         rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
-        #start subscriber for deadman enable
-        # rospy.Subscriber('/enable_move',Bool,self.enable_callback)
-        #start subscriber for jogging enable
-        # rospy.Subscriber('/jogging',Bool,self.jogging_callback)
+
 
         #rosparam check for joint lims and init position
         if not rospy.has_param("/start_position"):
@@ -238,6 +241,11 @@ class ur5e_arm():
 
     def wrench_callback(self, data):
         self.current_wrench = np.array([data.wrench.force.x, data.wrench.force.y, data.wrench.force.z, data.wrench.torque.x, data.wrench.torque.y, data.wrench.torque.z])
+
+    def ref_pos_callback(self, data):
+        self.command_last_updated = rospy.time.now()
+        self.commanded_joint_positions[self.joint_reorder] = data.position
+        self.commanded_joint_velocities[self.joint_reorder] = data.velocity
 
     def daq_callback(self, data):
         previous_positions = deepcopy(self.current_daq_positions)
@@ -632,11 +640,15 @@ class ur5e_arm():
         vel_ref_array = np.zeros(6)
         load_mass_array = np.zeros(6)
         self.vel_ref.data = vel_ref_array
-        rate = rospy.Rate(1) #TODO put back to 500
+        rate = rospy.Rate(500) #TODO put back to 500
 
         self.filter.calculate_initial_values(self.current_wrench)
 
         # initialization
+
+        self.commanded_joint_velocities *= 0.0
+        self.commanded_joint_positions = deepcopy(self.current_joint_positions)
+
         joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
         Ja = self.kdl_kin.jacobian(self.current_joint_positions)
         FK = self.kdl_kin.forward(self.current_joint_positions)
@@ -703,14 +715,14 @@ class ur5e_arm():
             self.set_current_config_as_control_ref_config(interactive = dialoge_enabled)
             self.current_daq_rel_positions_waraped = np.zeros(6)
         # print('safety_mode',self.safety_mode)
-        while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
+        while not self.shutdown and self.safety_mode == 1 and not rospy.is_shutdown(): #chutdown is set on ctrl-c.
             # # daq cartesian position
             # # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
-            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
+            # np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            np.clip(self.commanded_joint_positions, self.lower_lims, self.upper_lims, ref_pos)
             np.subtract(ref_pos, self.current_joint_positions, position_error)
             np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
-
+            print(position_error[0])
             # jacobian
             Ja = np.array(self.kdl_kin.jacobian(self.current_joint_positions))
             FK = np.array(self.kdl_kin.forward(self.current_joint_positions))
@@ -778,6 +790,7 @@ class ur5e_arm():
             vel_ref_array[2] += vr[2]
             vel_ref_array[0] += vr[0]
             vel_ref_array[1] += vr[1]
+            # print(vel_ref_array)
 
             '''*************************************************************************************'''
 
@@ -897,11 +910,11 @@ class ur5e_arm():
             np.clip(vel_ref_array,-self.max_joint_speeds,self.max_joint_speeds,vel_ref_array)
 
             # self.test_data.data = vel_error
-            self.test_data_pub.publish(self.test_data)
+            # self.test_data_pub.publish(self.test_data)
 
             #publish
             self.vel_ref.data = vel_ref_array
-            self.vel_ref.data = 0*vel_ref_array #TODO remove safety calculation
+            # self.vel_ref.data = 0*vel_ref_array #TODO remove safety calculation
             # self.ref_vel_pub.publish(self.vel_ref)
             self.vel_pub.publish(self.vel_ref)
             #wait
