@@ -72,19 +72,15 @@ class ur5e_arm():
     joint_ff_gains_varaible = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     default_pos = (np.pi/180)*np.array([90.0, -90.0, 90.0, 0.0, 90.0, 90.0])
-    cartesian_ref_pose = np.eye(4) #TODO make initialization roboust
+    # cartesian_ref_pose = np.eye(4) #TODO make initialization roboust
     robot_ref_pos = deepcopy(default_pos)
     saved_ref_pos = None
     daq_ref_pos = deepcopy(default_pos)
 
-    lower_lims = (np.pi/180)*np.array([0, -120, 0, -90, 0, 0])
-    upper_lims = (np.pi/180)*np.array([180, 5, 180, 90, 180, 210.0])
-    # conservative_lower_lims = (np.pi/180)*np.array([45.0, -100.0, 45.0, -135.0, -135.0, 135.0])
-    # conservative_upper_lims = (np.pi/180)*np.array([135, -45.0, 140.0, -45.0, -45.0, 225.0])
-    # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+    # lower_lims = (np.pi/180)*np.array([0, -120, 0, -90, 0, 0])
+    # upper_lims = (np.pi/180)*np.array([180, 5, 180, 90, 180, 210.0])
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    # max_joint_speeds = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0])*0.1
     #default control arm setpoint - should be calibrated to be 1 to 1 with default_pos
     #the robot can use relative joint control, but this saved defailt state can
     #be used to return to a 1 to 1, absolute style control
@@ -130,12 +126,8 @@ class ur5e_arm():
     kdl_kin_op = KDLKinematics(dummy_arm, "base_link", "wrist_3_link")
 
 
-    def __init__(self, test_control_signal = False, conservative_joint_lims = True):
+    def __init__(self, test_control_signal = False):
         '''set up controller class variables & parameters'''
-
-        if conservative_joint_lims:
-            self.lower_lims = self.conservative_lower_lims
-            self.upper_lims = self.conservative_upper_lims
 
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
@@ -169,6 +161,16 @@ class ur5e_arm():
         # rospy.Subscriber('/enable_move',Bool,self.enable_callback)
         #start subscriber for jogging enable
         # rospy.Subscriber('/jogging',Bool,self.jogging_callback)
+
+        #rosparam check for joint lims and init position
+        if not rospy.has_param("/start_position"):
+            rospy.logerr("ur5e_arm() - __init__ - settings params not loaded")
+        self.default_pos = (np.pi/180)*np.array(rospy.get_param("/start_position"))
+        self.lower_lims = (np.pi/180)*np.array(rospy.get_param("/joint_lims/lower"))
+        self.upper_lims = (np.pi/180)*np.array(rospy.get_param("/joint_lims/upper"))
+        print(self.upper_lims)
+        self.robot_ref_pos = deepcopy(self.default_pos)
+        self.daq_ref_pos = deepcopy(self.default_pos)
 
         #start vel publisher
         self.vel_pub = rospy.Publisher("/joint_group_vel_controller/command",
@@ -207,10 +209,8 @@ class ur5e_arm():
         self.test_data = Float64MultiArray(data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.is_homing = False
 
-
-        print("Joint Limmits: ")
-        print(self.upper_lims)
-        print(self.lower_lims)
+        rospy.loginfo("Joint Limmits: \n{} \n{}".format(self.upper_lims,self.lower_lims))
+        # time.sleep(100)
 
         if not self.ready_to_move():
             print('User action needed before commands can be sent to the robot.')
@@ -439,9 +439,9 @@ class ur5e_arm():
         else:
             for i, pos in enumerate(position):
                 if pos<self.lower_lims[i]:
-                    print('Joint {}: Position {:.5} exceeds lower bound {:.5}'.format(i,pos,self.lower_lims[i]))
+                    print('Joint {}: Position {:.5} exceeds lower bound {:.5}'.format(i+1,pos,self.lower_lims[i]))
                 if pos>self.upper_lims[i]:
-                    print('Joint {}: Position {:.5} exceeds upper bound {:.5}'.format(i,pos,self.lower_lims[i]))
+                    print('Joint {}: Position {:.5} exceeds upper bound {:.5}'.format(i+1,pos,self.upper_lims[i]))
             return False
 
     def remote_program_running(self):
@@ -706,48 +706,48 @@ class ur5e_arm():
         while not self.shutdown and self.safety_mode == 1 and self.enabled: #chutdown is set on ctrl-c.
             # # daq cartesian position
             # # joint_daq_pos = self.current_daq_positions * joint_inversion + self.daq_ref_pos
-            # np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
-            # np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
-            # np.subtract(ref_pos, self.current_joint_positions, position_error)
-            # np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
+            np.add(self.robot_ref_pos,self.current_daq_rel_positions_waraped,out = ref_pos)
+            np.clip(ref_pos, self.lower_lims, self.upper_lims, ref_pos)
+            np.subtract(ref_pos, self.current_joint_positions, position_error)
+            np.multiply(position_error,self.joint_p_gains_varaible,out=vel_ref_array)
 
             # jacobian
             Ja = np.array(self.kdl_kin.jacobian(self.current_joint_positions))
             FK = np.array(self.kdl_kin.forward(self.current_joint_positions))
             RT = FK[:3,:3]
 
-            #calculate cartesian error
-            if self.traj_active:
-                print('calculcating desired position')
-                #calculate desired position
+            # #calculate cartesian error
+            # if self.traj_active:
+            #     print('calculcating desired position')
+            #     #calculate desired position
 
-            #calculate cartesian error
-            self.current_pose = FK
-            cartesian_position_error = self.get_cartesian_ref_posion().reshape(-1) - self.current_pose[:3,3]
-            current_orientation = tf.transformations.quaternion_from_matrix(FK)
-            orientation_error = tf.transformations.quaternion_multiply(self.get_cartesian_ref_quaternion(), tf.transformations.quaternion_inverse(current_orientation))
-            axis, angle = get_quaternion_axis_angle(orientation_error)
-            angular_vel_error = axis*angle
-            # TODO cap cartesian error
-            error = np.array([cartesian_position_error[0],
-                              cartesian_position_error[1],
-                              cartesian_position_error[2],
-                              angular_vel_error[0],
-                              angular_vel_error[1],
-                              angular_vel_error[2]]).reshape((6,1))
+            # #calculate cartesian error
+            # self.current_pose = FK
+            # cartesian_position_error = self.get_cartesian_ref_posion().reshape(-1) - self.current_pose[:3,3]
+            # current_orientation = tf.transformations.quaternion_from_matrix(FK)
+            # orientation_error = tf.transformations.quaternion_multiply(self.get_cartesian_ref_quaternion(), tf.transformations.quaternion_inverse(current_orientation))
+            # axis, angle = get_quaternion_axis_angle(orientation_error)
+            # angular_vel_error = axis*angle
+            # # TODO cap cartesian error
+            # error = np.array([cartesian_position_error[0],
+            #                   cartesian_position_error[1],
+            #                   cartesian_position_error[2],
+            #                   angular_vel_error[0],
+            #                   angular_vel_error[1],
+            #                   angular_vel_error[2]]).reshape((6,1))
 
-            #convert to joint velocities
-            vel_ref_array = np.matmul(np.linalg.inv(Ja),error).reshape(-1)
-            # print(type(Ja))
-            # print(np.linalg.inv(Ja))
-            # print(type(error))
-            # print(cartesian_position_error)
-            #TODO position_error change usage to joint_position_error
-            print("angular vel error")
-            print(angular_vel_error)
-            print("joint vels")
-            print(vel_ref_array)
-            print("")
+            # #convert to joint velocities
+            # vel_ref_array = np.matmul(np.linalg.inv(Ja),error).reshape(-1)
+            # # print(type(Ja))
+            # # print(np.linalg.inv(Ja))
+            # # print(type(error))
+            # # print(cartesian_position_error)
+            # #TODO position_error change usage to joint_position_error
+            # print("angular vel error")
+            # print(angular_vel_error)
+            # print("joint vels")
+            # print(vel_ref_array)
+            # print("")
 
 
             wrench = self.current_wrench
@@ -962,7 +962,7 @@ if __name__ == "__main__":
     #This script is included for testing purposes
     print("starting")
 
-    arm = ur5e_arm(test_control_signal=True, conservative_joint_lims = False)
+    arm = ur5e_arm(test_control_signal=True)
     time.sleep(1)
     arm.stop_arm()
 

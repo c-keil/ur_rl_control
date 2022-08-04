@@ -5,5 +5,7 @@
   <arg name="stopped_controllers" default="pos_joint_traj_controller scaled_pos_joint_traj_controller" doc="Controllers that are initally loaded, but not started."/>
   <arg name="kinematics_config" default="$(find ur_rl_control)/calibration/ur5e_calibration.yaml" doc="Kinematics config file used for calibration correction. This will be used to verify the robot's calibration is matching the robot_description."/>
 
+  <rosparam command="load" file="$(find ur_rl_control)/config/settings.yaml" />
+
   <include file="$(find ur_robot_driver)/launch/ur5e_bringup.launch" pass_all_args="true" />
 </launch>
