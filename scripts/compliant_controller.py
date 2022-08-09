@@ -11,6 +11,7 @@ from filter import PythonBPF
 from ur_kinematics.ur_kin_py import forward, forward_link
 from kinematics import analytical_ik, nearest_ik_solution
 
+import tf
 from std_msgs.msg import Float64MultiArray, Header
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import WrenchStamped
@@ -49,6 +50,71 @@ two_pi = np.pi*2
 gripper_collision_points =  np.array([[0.04, 0.0, -0.21, 1.0], #fingertip
                                       [0.05, 0.04, 0.09,  1.0],  #hydraulic outputs
                                       [0.05, -0.04, 0.09,  1.0]]).T
+def pose_matrix(position, orientation):
+    '''returns a pose matrix from a position vector and quaternion'''
+    pose = np.eye(4)
+    pose = tf.transformations.quaternion_matrix(orientation)
+    pose[:3,3] = position.reshape(-1)
+    return pose
+
+class Base_Trajectory():
+    def update_trajectroy():
+        return True
+
+class Joint_Trajectory(Base_Trajectory):
+    def __init__(self, start_position, end_position, elapsed_time):
+        print('initilaizing trajectroy')
+        self.start_position = start_position
+        self.end_position = end_position
+        self.command_position = np.zeros(self.end_position.shape)
+        # self.speed = speed
+        self.elapsed_time = elapsed_time
+        self.loop_start_time = None
+        self.active = True
+        #list of interpolators ... this is kind of dumb, there is probably a better solution
+        self.traj = [InterpolatedUnivariateSpline([0.,self.elapsed_time],[self.start_position[i],self.end_position[i]],k=1) for i in range(6)]
+
+    def update_trajectory(self):
+        if self.loop_start_time is None:
+            self.loop_start_time = time.time()
+        
+        loop_time = time.time()-self.loop_start_time
+        if loop_time < self.elapsed_time:
+            self.command_position[:] = [self.traj[i](loop_time) for i in range(6)]
+        else:
+            self.command_position = self.end_position 
+            self.active = False
+
+        return self.command_position
+
+
+class Linear_Trajectory(Base_Trajectory):
+    def __init__(self, joint_positions, elapsed_time):
+        print('initilaizing psudo linear trajectroy')
+        self.end_position = deepcopy(joint_positions[-1])
+        self.interpolated_joint_positions = zip(*joint_positions)
+        self.samples = len(self.interpolated_joint_positions[0])
+        self.command_position = np.zeros((6))
+        # self.speed = speed
+        self.elapsed_time = elapsed_time
+        self.loop_start_time = None
+        self.active = True
+        #list of interpolators ... this is kind of dumb, there is probably a better solution
+        x = np.linspace(0,elapsed_time,self.samples)
+        self.traj = [InterpolatedUnivariateSpline(x, j_pos,k=1) for j_pos in self.interpolated_joint_positions]
+
+    def update_trajectory(self):
+        if self.loop_start_time is None:
+            self.loop_start_time = time.time()
+        
+        loop_time = time.time()-self.loop_start_time
+        if loop_time < self.elapsed_time:
+            self.command_position[:] = [self.traj[i](loop_time) for i in range(6)]
+        else:
+            self.command_position = self.end_position 
+            self.active = False
+
+        return self.command_position
 
 ## TODO Move some of the params in to a configuration file
 class ur5e_arm():
@@ -58,7 +124,7 @@ class ur5e_arm():
     shutdown = False
     enabled = True
     jogging = False
-    active_trajectory = None #should hold a trajectory object when active
+    current_trajectory = None #should hold a trajectory object when active
     joint_reorder = [2,1,0,3,4,5]
     breaking_stop_time = 0.1 #when stoping safely, executes the stop in 0.1s Do not make large!
 
@@ -226,6 +292,15 @@ class ur5e_arm():
             self.user_prompt_ready_to_move()
         else:
             print('Ready to move')
+
+    def get_cartesian_ref_posion(self):
+        return np.array(self.cartesian_ref_pose[:3,3]).reshape(-1)
+
+    def get_cartesian_ref_orientation(self):
+        return self.cartesian_ref_pose[:3,:3]
+
+    def get_cartesian_ref_quaternion(self):
+        return tf.transformations.quaternion_from_matrix(self.cartesian_ref_pose)
 
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
@@ -556,6 +631,72 @@ class ur5e_arm():
             #get joint ref
             reference_positon = nearest_ik_solution(analytical_ik(pose,self.upper_lims,self.lower_lims),self.current_joint_positions,threshold=0.2)
         return reference_positon
+    
+    def inverse_kinematics(self, pose):
+        '''IK call through kdl'''
+        assert pose.shape == (4,4)
+        assert type(pose) == np.ndarray
+
+        return self.kdl_kin.inverse(pose, q_guess = self.current_joint_positions, min_joints = self.lower_lims, max_joints = self.upper_lims)
+
+    def new_joint_trajectory(self, end_position, elapsed_time):
+        '''adds a new trajectroy'''
+        if self.current_trajectory is None:
+            self.current_trajectory = Joint_Trajectory(self.current_joint_positions, end_position, elapsed_time)
+            print("Trajectory Added")
+            return True
+        print("Failed to add trajectory")
+        return False
+    
+    def new_linear_trajectory(self, end_pose, elapsed_time):
+        '''adds pseudo linear trajectroy'''
+        assert end_pose.shape == (4,4)
+
+        if self.current_trajectory is None:
+            #get interpolated joint positions
+            start_pose = np.array(self.kdl_kin.forward(self.current_joint_positions))
+            num_samples = 10
+            end_pose = end_pose
+            start_position = start_pose[:3,3].flatten()
+            end_position = end_pose[:3,3].flatten()
+            start_orientation = tf.transformations.quaternion_from_matrix(start_pose)
+            end_orientation = tf.transformations.quaternion_from_matrix(end_pose)
+            interpolated_orientations = [tf.transformations.quaternion_slerp(start_orientation, end_orientation, i) for i in np.linspace(0,1,num_samples)]
+            interpolated_positions = [sample*(end_position-start_position) + start_position for sample in np.linspace(0,1,num_samples)]
+            print("DEBUG")
+            print(start_position)
+            print(end_position)
+            print(interpolated_positions[0], interpolated_positions[num_samples-1])
+            interpolated_poses = [pose_matrix(pos, rot) for pos, rot in zip(interpolated_positions, interpolated_orientations)]
+            interpolated_joint_positions = [self.inverse_kinematics(pose) for pose in interpolated_poses]
+            #safety check
+            if any(pos is None for pos in interpolated_joint_positions):
+                print("part of trajectroy has no Ik solution")
+                for i in range(len(interpolated_poses)):
+                    if interpolated_joint_positions[i] is None:
+                        break
+                print("Pose # {} : \n{}".format(i, interpolated_poses[i]))
+                return False
+            if np.any(interpolated_joint_positions[0] - self.current_joint_positions > 0.05):
+                print("trajectroy start violation")
+                return False
+            #joint limit check TODO make more robust
+
+            self.current_trajectory = Linear_Trajectory(interpolated_joint_positions, elapsed_time)
+            print("Trajectory Added")
+            return True
+        print("Failed to add trajectory")
+        return False
+
+    def update_trajectory(self):
+        '''Gets the current commanded position for the compliant trajectory'''
+        command_position = self.robot_ref_pos
+        if not self.current_trajectory is None:
+            command_position = self.current_trajectory.update_trajectory()
+            if not self.current_trajectory.active:
+                print('Trajectory complete')
+                self.current_trajectory = None
+        return command_position
 
     ## TODO Break down this into separate modular functions
     def move(self,
@@ -568,7 +709,8 @@ class ur5e_arm():
         rate = rospy.Rate(sample_rate)
         self.init_joint_admittance_controller(capture_start_as_ref_pos, dialoge_enabled)
 
-        while not self.shutdown and self.safety_mode == 1 and self.enabled: #shutdown is set on ctrl-c.
+        while not self.shutdown and self.safety_mode == 1 and not rospy.is_shutdown(): #shutdown is set on ctrl-c.
+            self.robot_ref_pos = self.update_trajectory() #updates robot_ref_pos
             self.joint_admittance_controller(ref_pos = self.robot_ref_pos,
                                              max_speeds = self.max_joint_speeds,
                                              max_acc = self.max_joint_acc)
@@ -683,11 +825,23 @@ if __name__ == "__main__":
     #                          override_initial_joint_lims=True,
     #                          require_enable = True))
     arm.homing()
-
-    pose = forward(arm.current_joint_positions)
+    # pose = np.array(forward(arm.current_joint_positions))
+    pose = np.array(arm.kdl_kin.forward(arm.current_joint_positions))
+    print("pose:")
+    print(pose)
+    pose[0,3] += 0.1
+    # print(pose)
+    # positions = nearest_ik_solution(analytical_ik(pose, arm.upper_lims, arm.lower_lims), arm.current_joint_positions)
+    # print(positions)
+    positions = arm.kdl_kin.inverse(pose, q_guess = arm.current_joint_positions, min_joints = arm.lower_lims, max_joints = arm.upper_lims)
+    print(positions)
+    print(dir(arm.kdl_kin))
+    print(arm.kdl_kin.joint_limits_lower)
+    print(arm.kdl_kin.joint_limits_upper)
     # print(pose)
     raw_input("Hit enter when ready to move")
-
+    print(arm.new_linear_trajectory(pose, 10.0))
+    # print(arm.new_joint_trajectory(positions, 1.0))
     arm.run()
 
     arm.stop_arm()
