@@ -20,6 +20,8 @@ from ur_dashboard_msgs.msg import SafetyMode
 from ur_dashboard_msgs.srv import IsProgramRunning, GetSafetyMode
 from std_msgs.msg import Bool
 
+from ur_rl_control.srv import CommandJoints, CommandJointsResponse, CommandPose, CommandPoseResponse
+
 # Import the module
 from urdf_parser_py.urdf import URDF
 from pykdl_utils.kdl_parser import kdl_tree_from_urdf_model
@@ -57,13 +59,31 @@ def pose_matrix(position, orientation):
     pose[:3,3] = position.reshape(-1)
     return pose
 
+def get_quaternion_axis_angle(q):
+    '''returns axis angle representation for a quaternion. Alays returns the minimum angle rotation direction'''
+    q = np.array(q)/np.linalg.norm(q)
+
+    angle = 2 * np.arccos(q[3])
+    #check for angle = 0
+    if angle > 0.0001:
+        axis = q[:3] / np.sqrt(1-q[3]*q[3])
+        #check for angle greater than pi
+        # TODO check that this is actually what we want to do
+        if angle > np.pi:
+            angle = 2*np.pi - angle
+            axis *= -1
+    else:
+        axis = np.array([1,0,0]) #arbitrary axis
+
+    return axis, angle
+
 class Base_Trajectory():
     def update_trajectroy():
         return True
 
 class Joint_Trajectory(Base_Trajectory):
     def __init__(self, start_position, end_position, elapsed_time):
-        print('initilaizing trajectroy')
+        print('initilaizing joint trajectroy')
         self.start_position = start_position
         self.end_position = end_position
         self.command_position = np.zeros(self.end_position.shape)
@@ -151,6 +171,7 @@ class ur5e_arm():
     
     max_joint_speeds = 3.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     max_joint_acc = 5.0 * np.array([1.0, 1.0, 1.0, 3.0, 3.0, 3.0])
+    max_linear_speed = 0.01
     homing_joint_speeds = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.2])
     jogging_joint_speeds = 2.0 * homing_joint_speeds
     homing_joint_acc = 2.0 * np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -216,8 +237,6 @@ class ur5e_arm():
     def __init__(self, test_control_signal = False):
         '''set up controller class variables & parameters'''
 
-
-
         #keepout (limmited to z axis height for now)
         self.keepout_enabled = True
         self.z_axis_lim = -0.37 # floor 0.095 #short table # #0.0 #table
@@ -270,6 +289,11 @@ class ur5e_arm():
                             Float64MultiArray,
                             queue_size=1)
         self.ref_pos = Float64MultiArray(data=[0,0,0,0,0,0])
+
+        #services
+        self.joint_traj_service = rospy.Service('joint_trajectory_command', CommandJoints, self.handle_joint_traj)
+        self.linear_joint_traj_service = rospy.Service('linear_trajectory_command', CommandPose, self.handle_linear_traj)
+
         #DEBUG
         # self.daq_pos_debug = Float64MultiArray(data=[0,0,0,0,0,0])
         # self.daq_pos_wraped_debug = Float64MultiArray(data=[0,0,0,0,0,0])
@@ -292,6 +316,7 @@ class ur5e_arm():
             self.user_prompt_ready_to_move()
         else:
             print('Ready to move')
+    
 
     def get_cartesian_ref_posion(self):
         return np.array(self.cartesian_ref_pose[:3,3]).reshape(-1)
@@ -305,6 +330,39 @@ class ur5e_arm():
     def joint_state_callback(self, data):
         self.current_joint_positions[self.joint_reorder] = data.position
         self.current_joint_velocities[self.joint_reorder] = data.velocity
+
+    def handle_joint_traj(self, data):
+        '''Recieves a joint trajectory and starts the trajectroy if appropriate'''
+        rospy.loginfo("complaiant_controller-handle_joint_traj : trajectroy recieved")
+
+        joints = data.joints
+        traj_time = 5.0
+
+        response = CommandJointsResponse(status = Bool(data = self.new_joint_trajectory(joints, traj_time)))
+        return response
+
+    def handle_linear_traj(self, data):
+        '''recieves a liner joint trajectory and starts if appropriate'''
+        pose = data.pose #assumes pose is relative to the current orientation
+        rospy.loginfo("complaiant_controller-handle_linear_traj : trajectroy recieved")
+        current_pose = np.array(self.kdl_kin.forward(self.current_joint_positions))
+        current_position = current_pose[:3,3].reshape(-1)
+        current_orientation = tf.transformations.quaternion_from_matrix(current_pose)
+
+        delta_pos = np.array([pose.position.x,pose.position.y,pose.position.z])
+        delta_rot = np.array([pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w])
+        rotation_axis, rotation_angle = get_quaternion_axis_angle(delta_rot)
+        command_position = current_position + delta_pos
+        command_orientation = tf.transformations.tf.transformations.quaternion_multiply(delta_rot, current_orientation)
+        rospy.loginfo("complaiant_controller-handle_linear_traj : commanded position delta {}".format(delta_pos))
+        rospy.loginfo("complaiant_controller-handle_linear_traj : commanded orientation delta axis: {}, angle: {}".format(rotation_axis, rotation_angle))
+        #TODO insert max delta check?
+        pose_matrix = pose_matrix(command_position, command_orientation)
+        
+        response = CommandPoseResponse()
+        response.status = Bool(self.new_linear_trajectory(pose_matrix, speed = self.max_linear_speed))
+
+        return response
 
     def wrench_callback(self, data):
         self.current_wrench = np.array([data.wrench.force.x, data.wrench.force.y, data.wrench.force.z, data.wrench.torque.x, data.wrench.torque.y, data.wrench.torque.z])
@@ -322,23 +380,23 @@ class ur5e_arm():
         # print(self)
         self.first_wrench_callback = False
 
-    def daq_callback(self, data):
-        previous_positions = deepcopy(self.current_daq_positions)
-        self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
-        self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
-        self.current_daq_velocities *= joint_inversion #account for diferent conventions
+    # def daq_callback(self, data):
+    #     previous_positions = deepcopy(self.current_daq_positions)
+    #     self.current_daq_positions[:] = [data.encoder1.pos, data.encoder2.pos, data.encoder3.pos, data.encoder4.pos, data.encoder5.pos, data.encoder6.pos]
+    #     self.current_daq_velocities[:] = [data.encoder1.vel, data.encoder2.vel, data.encoder3.vel, data.encoder4.vel, data.encoder5.vel, data.encoder6.vel]
+    #     self.current_daq_velocities *= joint_inversion #account for diferent conventions
 
-        if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
-            print('stopping arm - encoder error!')
-            print('Daq position change is too high')
-            print('Previous Positions:\n{}'.format(previous_positions))
-            print('New Positions:\n{}'.format(self.current_daq_positions))
-            self.shutdown_safe()
-        # np.subtract(,,out=) #update relative position
-        self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
-        self.current_daq_rel_positions *= joint_inversion
-        self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
-        self.first_daq_callback = False
+    #     if not self.first_daq_callback and np.any(np.abs(self.current_daq_positions - previous_positions) > self.position_jump_error):
+    #         print('stopping arm - encoder error!')
+    #         print('Daq position change is too high')
+    #         print('Previous Positions:\n{}'.format(previous_positions))
+    #         print('New Positions:\n{}'.format(self.current_daq_positions))
+    #         self.shutdown_safe()
+    #     # np.subtract(,,out=) #update relative position
+    #     self.current_daq_rel_positions = self.current_daq_positions - self.control_arm_ref_config
+    #     self.current_daq_rel_positions *= joint_inversion
+    #     self.current_daq_rel_positions_waraped = np.mod(self.current_daq_rel_positions+np.pi,two_pi)-np.pi
+    #     self.first_daq_callback = False
 
     # def wrap_relative_angles(self):
     ## TODO Expand this to be a better exception handler 
@@ -648,9 +706,13 @@ class ur5e_arm():
         print("Failed to add trajectory")
         return False
     
-    def new_linear_trajectory(self, end_pose, elapsed_time):
+    def new_linear_trajectory(self, end_pose, speed = 0.01):
         '''adds pseudo linear trajectroy'''
         assert end_pose.shape == (4,4)
+
+        if speed > self.max_linear_speed:
+            speed = self.max_linear_speed
+        # TODO check end pose in workspace
 
         if self.current_trajectory is None:
             #get interpolated joint positions
@@ -659,16 +721,27 @@ class ur5e_arm():
             end_pose = end_pose
             start_position = start_pose[:3,3].flatten()
             end_position = end_pose[:3,3].flatten()
+            magnitude = np.linalg.norm(end_position - start_position)
+            elapsed_time = magnitude/speed
+            rospy.loginfo("compliant_controller - new_linear_trajectory : trajectroy time calculated as {}".format(elapsed_time))
             start_orientation = tf.transformations.quaternion_from_matrix(start_pose)
             end_orientation = tf.transformations.quaternion_from_matrix(end_pose)
             interpolated_orientations = [tf.transformations.quaternion_slerp(start_orientation, end_orientation, i) for i in np.linspace(0,1,num_samples)]
             interpolated_positions = [sample*(end_position-start_position) + start_position for sample in np.linspace(0,1,num_samples)]
-            print("DEBUG")
-            print(start_position)
-            print(end_position)
-            print(interpolated_positions[0], interpolated_positions[num_samples-1])
+            # print("DEBUG")
+            # print(start_position)
+            # print(end_position)
+            # print(interpolated_positions[0], interpolated_positions[num_samples-1])
             interpolated_poses = [pose_matrix(pos, rot) for pos, rot in zip(interpolated_positions, interpolated_orientations)]
-            interpolated_joint_positions = [self.inverse_kinematics(pose) for pose in interpolated_poses]
+            # interpolated_joint_positions = [self.inverse_kinematics(pose) for pose in interpolated_poses]
+            interpolated_joint_positions = [self.inverse_kinematics(interpolated_poses[0])]
+            for i, pose in enumerate(interpolated_poses[1:]):
+                #use the previous joint positions as the seed for the new search
+                interpolated_joint_positions.append(self.kdl_kin.inverse(pose, 
+                                                                        q_guess = interpolated_joint_positions[i], 
+                                                                        min_joints = self.lower_lims,
+                                                                        max_joints = self.upper_lims))
+
             #safety check
             if any(pos is None for pos in interpolated_joint_positions):
                 print("part of trajectroy has no Ik solution")
@@ -840,7 +913,7 @@ if __name__ == "__main__":
     print(arm.kdl_kin.joint_limits_upper)
     # print(pose)
     raw_input("Hit enter when ready to move")
-    print(arm.new_linear_trajectory(pose, 10.0))
+    print(arm.new_linear_trajectory(pose, speed = 0.01))
     # print(arm.new_joint_trajectory(positions, 1.0))
     arm.run()
 

@@ -164,7 +164,6 @@ class ur5e_arm():
         rospy.wait_for_service('/ur_hardware_interface/dashboard/get_safety_mode')
         self.safety_mode_proxy = rospy.ServiceProxy('/ur_hardware_interface/dashboard/get_safety_mode', GetSafetyMode)
 
-
         #rosparam check for joint lims and init position
         if not rospy.has_param("/start_position"):
             rospy.logerr("ur5e_arm() - __init__ - settings params not loaded")
